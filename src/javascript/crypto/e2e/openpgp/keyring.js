@@ -42,7 +42,6 @@ goog.require('e2e.openpgp.Mpi');
 goog.require('e2e.openpgp.block.TransferablePublicKey');
 goog.require('e2e.openpgp.block.TransferableSecretKey');
 goog.require('e2e.openpgp.block.factory');
-goog.require('e2e.openpgp.error.ParseError');
 goog.require('e2e.openpgp.error.SerializationError');
 goog.require('e2e.openpgp.error.UnsupportedError');
 goog.require('e2e.openpgp.keygenerator');
@@ -101,7 +100,7 @@ e2e.openpgp.KeyRing.prototype.localStorage_;
 /**
  * The public key ring. It's a map keyed by email. The values are lists of
  * block.TransferablePublicKey objects associated with this email.
- * @type {!e2e.openpgp.KeyRingType}
+ * @type {!e2e.openpgp.TransferableKeyMap}
  * @private
  */
 e2e.openpgp.KeyRing.prototype.pubKeyRing_;
@@ -110,7 +109,7 @@ e2e.openpgp.KeyRing.prototype.pubKeyRing_;
 /**
  * The private key ring. It's a map keyed by email. The values are lists of
  * block.TransferableSecretKey objects associated with this email.
- * @type {!e2e.openpgp.KeyRingType}
+ * @type {!e2e.openpgp.TransferableKeyMap}
  * @private
  */
 e2e.openpgp.KeyRing.prototype.privKeyRing_;
@@ -257,13 +256,14 @@ e2e.openpgp.KeyRing.prototype.importKey = function(
   } else {
     return false;
   }
+  // This will throw on signature verification failures.
   keyBlock.processSignatures();
   var uids = keyBlock.getUserIds();
   goog.array.removeDuplicates(uids);
   var importedKeys = goog.array.map(uids, function(uid) {
     return this.importKey_(uid, keyBlock, keyRing, opt_passphrase);
   }, this);
-  // Return false if any key failed to import.
+  // Return false if any key failed to import (e.g. because it already existed).
   return importedKeys.indexOf(false) > -1;
 };
 
@@ -382,7 +382,7 @@ e2e.openpgp.KeyRing.prototype.generateKey = function(email,
 
 /**
  * @param {string} email The email to associate the key with.
- * @param {{privKey: (Array|null), pubKey: (Array|null)}} keyData
+ * @param {{privKey: Array, pubKey: Array}} keyData
  * @return {!Array.<!e2e.openpgp.block.TransferableKey>}
  * @private
  */
@@ -465,12 +465,12 @@ e2e.openpgp.KeyRing.prototype.getKey_ = function(keyId, opt_secret) {
   var result;
   // Using goog.array.find to break on first match.
   goog.array.find(goog.array.flatten(keyRing.getValues()), function(key) {
-    if (goog.array.equals(keyId, key.keyPacket.keyId)) {
+    if (e2e.compareByteArray(keyId, key.keyPacket.keyId)) {
       result = key.keyPacket;
       return true;
     }
     return Boolean(goog.array.find(key.subKeys, function(subKey) {
-      if (goog.array.equals(keyId, subKey.keyId)) {
+      if (e2e.compareByteArray(keyId, subKey.keyId)) {
         result = subKey;
         return true;
       }
@@ -493,7 +493,8 @@ e2e.openpgp.KeyRing.prototype.getKeyBlock = function(keyObject) {
   var ret = goog.array.find(
       goog.array.flatten(keyRing.getValues()),
       function(keyBlock) {
-        return goog.array.equals(keyBlock.keyPacket.fingerprint, fingerprint);
+        return e2e.compareByteArray(keyBlock.keyPacket.fingerprint,
+            fingerprint);
       });
   return this.lockSecretKey_(ret);
 };
@@ -515,6 +516,7 @@ e2e.openpgp.KeyRing.prototype.lockSecretKey_ = function(key) {
     var serialized = key.serialize();
     var parsed = /** @type {!e2e.openpgp.block.TransferableSecretKey} */ (
         e2e.openpgp.block.factory.parseByteArrayTransferableKey(serialized));
+    parsed.processSignatures();
     parsed.unlock();
     var success = false;
     if (this.passphrase_) {
@@ -617,7 +619,7 @@ e2e.openpgp.KeyRing.prototype.searchKeyLocalAndRemote = function(email,
 /**
  * Gets all of the keys in the keyring.
  * @param {boolean=} opt_priv If true, fetch only private keys.
- * @return {!e2e.openpgp.KeyRingType} A clone of the key ring maps.
+ * @return {!e2e.openpgp.TransferableKeyMap} A clone of the key ring maps.
  */
 e2e.openpgp.KeyRing.prototype.getAllKeys = function(opt_priv) {
   if (opt_priv) {
@@ -653,7 +655,7 @@ e2e.openpgp.KeyRing.prototype.hasPassphrase = function() {
 
 
 /**
- * @return {boolean} True if the keyring is encrypted in LocalStorage.
+ * @return {boolean} True if the keyring is encrypted in persistent storage.
  */
 e2e.openpgp.KeyRing.prototype.isEncrypted = function() {
   return (this.passphrase_ != null && this.passphrase_ != '');
@@ -674,7 +676,7 @@ e2e.openpgp.KeyRing.prototype.reset = function() {
 
 /**
  * Searches a key in a key ring from an email.
- * @param {!e2e.openpgp.KeyRingType} keyRing The key ring to search.
+ * @param {!e2e.openpgp.TransferableKeyMap} keyRing The key ring to search.
  * @param {string} email The email to search for.
  * @return {Array.<!e2e.openpgp.block.TransferableKey>} An array of keys for
  *     that user id or null.
@@ -719,10 +721,12 @@ e2e.openpgp.KeyRing.prototype.searchPublicKeyRemote_ = function(email) {
  * key if there is already a matching key ID.
  * @param {string} email The email associated with the key.
  * @param {!e2e.openpgp.block.TransferableKey} keyBlock The key to import.
- * @param {!e2e.openpgp.KeyRingType} keyRing The keyring to add the keys to.
+ * @param {!e2e.openpgp.TransferableKeyMap} keyRing The keyring to add the keys
+ *     to.
  * @param {!e2e.ByteArray=} opt_passphrase The passphrase used to
  *     protect the key.
- * @return {boolean} If the key import was successful.
+ * @return {boolean} If the key import was successful. False if the key for a
+ *     given email address with the same ID already exists in a keyring.
  * @private
  */
 e2e.openpgp.KeyRing.prototype.importKey_ = function(
@@ -739,7 +743,7 @@ e2e.openpgp.KeyRing.prototype.importKey_ = function(
   if (keyRing.containsKey(email)) {
     emailKeyBlocks = keyRing.get(email);
     addKey = !goog.array.some(emailKeyBlocks, function(emailKeyBlock) {
-      return goog.isDef(keyBlock.keyPacket.keyId) && goog.array.equals(
+      return goog.isDef(keyBlock.keyPacket.keyId) && e2e.compareByteArray(
           emailKeyBlock.keyPacket.keyId, keyBlock.keyPacket.keyId);
     });
     // TODO(evn): Merge information when the key block is already in keyring.
@@ -849,7 +853,8 @@ e2e.openpgp.KeyRing.prototype.getOrCreateSalt_ = function() {
 
 /**
  * Serializes a key ring to an object.
- * @param {!e2e.openpgp.KeyRingType} keyRing The key ring to be serialized.
+ * @param {!e2e.openpgp.TransferableKeyMap} keyRing The key ring to be
+ *     serialized.
  * @return {!Object}
  * @private
  */
@@ -960,31 +965,18 @@ e2e.openpgp.KeyRing.prototype.decrypt_ = function(ciphertext) {
 /**
  * Deserializes a private key ring from an object.
  * @param {!e2e.openpgp.SerializedKeyRing} s The serialized key ring.
- * @return {!e2e.openpgp.KeyRingType}
+ * @return {!e2e.openpgp.TransferableKeyMap}
  * @private
  */
 e2e.openpgp.KeyRing.prototype.objectToPrivKeyRing_ = function(s) {
   var obj = goog.object.map(s, function(keys, uid) {
     return goog.array.map(keys, function(key) {
-      var block;
-      try {
-        block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
-            goog.crypt.base64.decodeStringToByteArray(key));
-      } catch (e) {
-        if (e instanceof e2e.openpgp.error.ParseError) {
-          // Perhaps the user used has and old-format packet keyring.
-          var keyPacket = e2e.openpgp.packet.SecretKey.parse(
-              goog.crypt.base64.decodeStringToByteArray(key));
-          var uidPacket = new e2e.openpgp.packet.UserId(uid);
-          var serialized = [].concat(
-              keyPacket.serialize()).concat(uidPacket.serialize());
-          block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
-              serialized);
-        }
-      }
+      var block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
+          goog.crypt.base64.decodeStringToByteArray(key));
       if (!(block instanceof e2e.openpgp.block.TransferableSecretKey)) {
         throw new Error('Unexpected block in keyring.');
       }
+      block.processSignatures();
       block.unlock();
       return block;
     });
@@ -996,32 +988,18 @@ e2e.openpgp.KeyRing.prototype.objectToPrivKeyRing_ = function(s) {
 /**
  * Deserializes a public key ring from an object.
  * @param {!e2e.openpgp.SerializedKeyRing} s The serialized key ring.
- * @return {!e2e.openpgp.KeyRingType}
+ * @return {!e2e.openpgp.TransferableKeyMap}
  * @private
  */
 e2e.openpgp.KeyRing.prototype.objectToPubKeyRing_ = function(s) {
   var obj = goog.object.map(s, function(keys, uid) {
     return goog.array.map(keys, function(key) {
-      var block;
-      try {
-        block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
-            goog.crypt.base64.decodeStringToByteArray(key));
-      } catch (e) {
-        // TODO(evn): Delete this code before launch.
-        if (e instanceof e2e.openpgp.error.ParseError) {
-          // Perhaps the user used has and old-format packet keyring.
-          var keyPacket = e2e.openpgp.packet.PublicKey.parse(
-              goog.crypt.base64.decodeStringToByteArray(key));
-          var uidPacket = new e2e.openpgp.packet.UserId(uid);
-          var serialized = [].concat(
-              keyPacket.serialize()).concat(uidPacket.serialize());
-          block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
-              serialized);
-        }
-      }
+      var block = e2e.openpgp.block.factory.parseByteArrayTransferableKey(
+          goog.crypt.base64.decodeStringToByteArray(key));
       if (!(block instanceof e2e.openpgp.block.TransferablePublicKey)) {
         throw new Error('Unexpected block in keyring.');
       }
+      block.processSignatures();
       return block;
     });
   });
@@ -1063,7 +1041,7 @@ e2e.openpgp.KeyRing.prototype.restoreKeyring = function(data, email) {
 
 /**
  * Extracts serialized key data contained in a crypto object.
- * @param {{privKey: (Array|null), pubKey: (Array|null)}} keyData The map
+ * @param {{privKey: Array, pubKey: Array}} keyData The map
  *     to store the extracted data.
  * @param {!e2e.cipher.Cipher|!e2e.signer.Signer} cryptor
  *     The crypto object to extract key material.

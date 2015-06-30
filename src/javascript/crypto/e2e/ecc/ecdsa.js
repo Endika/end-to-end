@@ -26,6 +26,7 @@ goog.require('e2e.BigNum');
 goog.require('e2e.ecc.PrimeCurve');
 goog.require('e2e.ecc.Protocol');
 goog.require('e2e.error.InvalidArgumentsError');
+goog.require('e2e.hash.Algorithm');
 goog.require('e2e.hash.Sha256');
 goog.require('e2e.hash.Sha384');
 goog.require('e2e.hash.Sha512');
@@ -67,6 +68,18 @@ goog.inherits(e2e.ecc.Ecdsa, e2e.ecc.Protocol);
 
 
 /**
+ * List of Hash algorithms that are allowed to be used for ECDSA.
+ * @type {!Array<!e2e.hash.Algorithm>}
+ * @private
+ */
+e2e.ecc.Ecdsa.ALLOWED_HASHES_ = [
+  e2e.hash.Algorithm.SHA256,
+  e2e.hash.Algorithm.SHA384,
+  e2e.hash.Algorithm.SHA512
+];
+
+
+/**
  * The hash function that should be used. This is selected based on the curve.
  * @private {!e2e.hash.Hash}
  */
@@ -76,6 +89,20 @@ e2e.ecc.Ecdsa.prototype.hash_;
 /** @return {!e2e.hash.Hash} */
 e2e.ecc.Ecdsa.prototype.getHash = function() {
   return this.hash_;
+};
+
+
+/**
+ * Sets the appropriate hash algorithm. Used e.g. during signature verification
+ * in OpenPGP, where the signer specifies which algorithm was used.
+ * @param {!e2e.hash.Hash} hash The hash algorithm.
+ */
+e2e.ecc.Ecdsa.prototype.setHash = function(hash) {
+  if (!goog.array.contains(e2e.ecc.Ecdsa.ALLOWED_HASHES_, hash.algorithm)) {
+    throw new e2e.error.InvalidArgumentsError(
+        'Specified hash algorithm is disallowed for ECDSA: ' + hash.algorithm);
+  }
+  this.hash_ = hash;
 };
 
 

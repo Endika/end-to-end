@@ -20,22 +20,18 @@
 
 goog.provide('e2e.ext.ui.panels.prompt.EncryptSign');
 
-goog.require('e2e.ext.constants');
 goog.require('e2e.ext.constants.Actions');
 goog.require('e2e.ext.constants.CssClass');
 goog.require('e2e.ext.constants.ElementId');
 goog.require('e2e.ext.ui.dialogs.Generic');
 goog.require('e2e.ext.ui.dialogs.InputType');
-goog.require('e2e.ext.ui.draftmanager');
 goog.require('e2e.ext.ui.panels.Chip');
 goog.require('e2e.ext.ui.panels.ChipHolder');
 goog.require('e2e.ext.ui.panels.prompt.PanelBase');
-goog.require('e2e.ext.ui.preferences');
 goog.require('e2e.ext.ui.templates.panels.prompt');
-goog.require('e2e.ext.utils.action');
 goog.require('e2e.ext.utils.text');
 goog.require('e2e.openpgp.asciiArmor');
-goog.require('goog.Timer');
+goog.require('goog.Promise');
 goog.require('goog.array');
 goog.require('goog.dom');
 goog.require('goog.dom.classlist');
@@ -48,11 +44,9 @@ goog.require('soy');
 goog.scope(function() {
 var constants = e2e.ext.constants;
 var dialogs = e2e.ext.ui.dialogs;
-var drafts = e2e.ext.ui.draftmanager;
 var messages = e2e.ext.messages;
 var panels = e2e.ext.ui.panels;
 var promptPanels = e2e.ext.ui.panels.prompt;
-var preferences = e2e.ext.ui.preferences;
 var templates = e2e.ext.ui.templates.panels.prompt;
 var utils = e2e.ext.utils;
 
@@ -64,12 +58,14 @@ var utils = e2e.ext.utils;
  *     End-to-End actions.
  * @param {!messages.BridgeMessageRequest} content The content that the user
  *     wants to encrypt.
+ * @param {!e2e.ext.Preferences} preferences User preferences.
  * @param {!function(Error)} errorCallback A callback where errors will be
  *     passed to.
  * @constructor
  * @extends {promptPanels.PanelBase}
  */
-promptPanels.EncryptSign = function(actionExecutor, content, errorCallback) {
+promptPanels.EncryptSign = function(actionExecutor, content, preferences,
+    errorCallback) {
   goog.base(this, chrome.i18n.getMessage('promptEncryptSignTitle'),
       content, errorCallback);
 
@@ -77,21 +73,18 @@ promptPanels.EncryptSign = function(actionExecutor, content, errorCallback) {
   this.errorCallback_ = errorCallback;
 
   /**
-   * A timer to automatically save drafts.
-   * TODO(radi): Optimize the frequency of which auto-save triggers as it will
-   * cause additional CPU (and possibly network) utilization.
-   * @type {!goog.Timer}
-   * @private
-   */
-  this.autoSaveTimer_ = new goog.Timer(constants.AUTOSAVE_INTERVAL);
-  this.registerDisposable(this.autoSaveTimer_);
-
-  /**
    * A holder for the intended recipients of a PGP message.
    * @type {panels.ChipHolder}
    * @private
    */
   this.chipHolder_ = null;
+
+  /**
+   * User preferences.
+   * @type {e2e.ext.Preferences}
+   * @private
+   */
+  this.preferences_ = preferences;
 };
 goog.inherits(promptPanels.EncryptSign, promptPanels.PanelBase);
 
@@ -99,19 +92,17 @@ goog.inherits(promptPanels.EncryptSign, promptPanels.PanelBase);
 /** @override */
 promptPanels.EncryptSign.prototype.decorateInternal = function(elem) {
   goog.base(this, 'decorateInternal', elem);
-
   var content = this.getContent();
   var origin = content.origin;
-  var signInsertLabel = /^https:\/\/mail\.google\.com$/.test(origin) ?
-      chrome.i18n.getMessage('promptEncryptSignInsertIntoGmailLabel') :
+  var signInsertLabel = this.canSend_(origin) ?
+      chrome.i18n.getMessage('promptEncryptSignSendLabel') :
       chrome.i18n.getMessage('promptEncryptSignInsertLabel');
 
   soy.renderElement(elem, templates.renderEncrypt, {
     insertCheckboxEnabled: content.canInject,
+    canSaveDraft: content.canSaveDraft,
     signerCheckboxTitle: chrome.i18n.getMessage('promptSignMessageAs'),
     fromLabel: chrome.i18n.getMessage('promptFromLabel'),
-    passphraseEncryptionLinkTitle: chrome.i18n.getMessage(
-        'promptEncryptionPassphraseLink'),
     actionButtonTitle: chrome.i18n.getMessage(
         'promptEncryptSignActionLabel'),
     cancelButtonTitle: chrome.i18n.getMessage('actionCancelPgpAction'),
@@ -119,124 +110,173 @@ promptPanels.EncryptSign.prototype.decorateInternal = function(elem) {
         'promptEncryptSignSaveDraftLabel'),
     insertButtonTitle: signInsertLabel,
     subject: content.subject,
-    subjectLabel: chrome.i18n.getMessage('promptSubjectLabel')
+    subjectLabel: chrome.i18n.getMessage('promptSubjectLabel'),
+    origin: content.origin
   });
+};
+
+
+/**
+ * Checks if the web application in given origin supports sending the message to
+ * recipients.
+ * @param {string} origin The origin of the web application.
+ * @return {boolean} True if the message can be sent.
+ * @private
+ */
+promptPanels.EncryptSign.prototype.canSend_ = function(origin) {
+  return false;
+};
+
+
+/**
+ * Populates the UI elements with the received data.
+ * @private
+ */
+promptPanels.EncryptSign.prototype.populateUi_ = function() {
+  goog.Promise.all([
+    // Populate the UI with the available encryption keys.
+    this.renderEncryptionKeys_(),
+    // Populate the UI with the available signing keys.
+    this.renderSigningKeys_(),
+    // Load selected content.
+    this.loadSelectedContent_()
+  ]).then(
+      // When all of the above steps completed, set up focus.
+      this.focusRelevantElement_, undefined, this);
 };
 
 
 /** @override */
 promptPanels.EncryptSign.prototype.enterDocument = function() {
   goog.base(this, 'enterDocument');
-
   var origin = this.getContent().origin;
 
-  // Populate the UI with the available encryption keys.
-  this.renderEncryptionKeys_();
-
-  // Populate the UI with the available signing keys.
-  this.renderSigningKeys_();
-
-  // Load saved draft. If not, load selected content.
-  this.loadSavedDraftOrSelectedContent_();
-
-  this.getHandler().listen(
-      this.autoSaveTimer_, goog.Timer.TICK,
-      goog.partial(this.saveDraft_, origin));
-
-  this.getHandler().listen(
-      goog.dom.getElement(constants.ElementId.PASSPHRASE_ENCRYPTION_LINK),
-      goog.events.EventType.CLICK, this.renderEncryptionPassphraseDialog_);
+  this.populateUi_();
 
   this.getHandler().listen(
       this.getElementByClass(constants.CssClass.ACTION),
       goog.events.EventType.CLICK,
       goog.bind(this.encryptSign_, this));
 
-  if (this.getContent().canInject) {
+  if (this.getContent().canSaveDraft) {
     this.getHandler().listen(
         this.getElementByClass(constants.CssClass.SAVE),
-        goog.events.EventType.CLICK, goog.partial(this.saveDraft_, origin));
+        goog.events.EventType.CLICK, goog.partial(this.saveDraft_, origin,
+            false));
+  }
 
+  if (this.getContent().canInject) {
     this.getHandler().listen(
         this.getElementByClass(constants.CssClass.INSERT),
         goog.events.EventType.CLICK,
         goog.partial(this.insertMessageIntoPage_, origin));
-  }
-
-  if (preferences.isAutoSaveEnabled()) {
-    var textArea = /** @type {HTMLTextAreaElement} */
-        (this.getElement().querySelector('textarea'));
-    this.getHandler().listenOnce(textArea, goog.events.EventType.KEYDOWN,
-        goog.bind(this.autoSaveTimer_.start, this.autoSaveTimer_));
   }
 };
 
 
 /**
  * Renders the available encryption keys in the UI.
+ * @return {!goog.Promise} Promise resolved when the encryption keys have
+ *     been successfully rendered. It's never rejected.
  * @private
  */
 promptPanels.EncryptSign.prototype.renderEncryptionKeys_ = function() {
-  this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
-    action: constants.Actions.LIST_KEYS,
-    content: 'public'
-  }), this, goog.bind(function(searchResult) {
-    var providedRecipients = this.getContent().recipients || [];
-    var intendedRecipients = [];
-    var allAvailableRecipients = goog.object.getKeys(searchResult);
-    var recipientsEmailMap =
-        this.getRecipientsEmailMap_(allAvailableRecipients);
-    goog.array.forEach(providedRecipients, function(recipient) {
-      if (recipientsEmailMap.hasOwnProperty(recipient)) {
-        goog.array.extend(intendedRecipients, recipientsEmailMap[recipient]);
-      }
-    });
-
-    this.chipHolder_ = new panels.ChipHolder(
-        intendedRecipients, allAvailableRecipients);
-    this.addChild(this.chipHolder_, false);
-    this.chipHolder_.decorate(
-        goog.dom.getElement(constants.ElementId.CHIP_HOLDER));
-  }, this), goog.bind(function(error) {
-    this.chipHolder_ = new panels.ChipHolder([], []);
-    this.addChild(this.chipHolder_, false);
-    this.chipHolder_.decorate(
-        goog.dom.getElement(constants.ElementId.CHIP_HOLDER));
-    this.errorCallback_(error);
-  }, this));
+  return new goog.Promise(function(resolve, reject) {
+    this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
+      action: constants.Actions.LIST_KEYS,
+      content: 'public'
+    }), this, goog.bind(function(searchResult) {
+      var providedRecipients = this.getContent().recipients || [];
+      var intendedRecipients = [];
+      var allAvailableRecipients = goog.object.getKeys(searchResult);
+      var recipientsEmailMap =
+          this.getRecipientsEmailMap_(allAvailableRecipients);
+      goog.array.forEach(providedRecipients, function(recipient) {
+        if (recipientsEmailMap.hasOwnProperty(recipient)) {
+          goog.array.extend(intendedRecipients, recipientsEmailMap[recipient]);
+        }
+      });
+      this.chipHolder_ = new panels.ChipHolder(
+          intendedRecipients, allAvailableRecipients,
+          goog.bind(this.renderEncryptionPassphraseDialog_, this));
+      this.addChild(this.chipHolder_, false);
+      this.chipHolder_.decorate(
+          goog.dom.getElement(constants.ElementId.CHIP_HOLDER));
+      resolve();
+    }, this), goog.bind(function(error) {
+      this.chipHolder_ = new panels.ChipHolder([], [],
+          goog.bind(this.renderEncryptionPassphraseDialog_, this));
+      this.addChild(this.chipHolder_, false);
+      this.chipHolder_.decorate(
+          goog.dom.getElement(constants.ElementId.CHIP_HOLDER));
+      this.errorCallback_(error);
+      resolve();
+    }, this));
+  }, this);
 };
 
 
 /**
  * Renders the available signing keys in the UI.
+ * @return {!goog.Promise} Promise resolved when the signing keys have
+ *     been successfully rendered. It's never rejected.
  * @private
  */
 promptPanels.EncryptSign.prototype.renderSigningKeys_ = function() {
-  this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
-    action: constants.Actions.LIST_KEYS,
-    content: 'private'
-  }), this, goog.bind(function(privateKeyResult) {
-    var availableSigningKeys = goog.object.getKeys(privateKeyResult);
-    var signerSelect = goog.dom.getElement(constants.ElementId.SIGNER_SELECT);
-    var signCheck = goog.dom.getElement(constants.ElementId.SIGN_MESSAGE_CHECK);
+  return new goog.Promise(function(resolve, reject) {
+    this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
+      action: constants.Actions.LIST_KEYS,
+      content: 'private'
+    }), this, goog.bind(function(privateKeyResult) {
+      var availableSigningKeys = goog.object.getKeys(privateKeyResult);
+      var signerSelect = goog.dom.getElement(constants.ElementId.SIGNER_SELECT);
+      var signCheck = goog.dom.getElement(
+          constants.ElementId.SIGN_MESSAGE_CHECK);
 
-    if (availableSigningKeys.length == 0) {
-      signCheck.disabled = true;
-      signerSelect.disabled = true;
-      var noKeysLabel = document.createTextNode(
-          chrome.i18n.getMessage('promptNoPrivateKeysFound'));
-      var fromHolder = goog.dom.getElement(constants.ElementId.FROM_HOLDER);
-      fromHolder.appendChild(noKeysLabel);
-    } else {
-      signCheck.checked = true;
-    }
+      if (availableSigningKeys.length == 0) {
+        signCheck.disabled = true;
+        signerSelect.disabled = true;
+        var noKeysLabel = document.createTextNode(
+            chrome.i18n.getMessage('promptNoPrivateKeysFound'));
+        var fromHolder = goog.dom.getElement(constants.ElementId.FROM_HOLDER);
+        fromHolder.appendChild(noKeysLabel);
+      } else {
+        signCheck.checked = true;
+      }
 
-    goog.array.forEach(availableSigningKeys, function(key) {
-      var keyElem = document.createElement('option');
-      keyElem.textContent = key;
-      signerSelect.appendChild(keyElem);
-    });
-  }, this));
+      goog.array.forEach(availableSigningKeys, function(key) {
+        var keyElem = document.createElement('option');
+        keyElem.textContent = key;
+        signerSelect.appendChild(keyElem);
+      });
+      resolve();
+    }, this), goog.bind(function(error) {
+      this.errorCallback_(error);
+      resolve();
+    }, this));
+  }, this);
+};
+
+
+/**
+ * Puts the focus on the chip holder (if no user chips are present) or the
+ * textarea.
+ * @private
+ */
+promptPanels.EncryptSign.prototype.focusRelevantElement_ = function() {
+  if (!this.getElement()) {
+    return;
+  }
+  var textArea = /** @type {HTMLTextAreaElement} */
+      (this.getElement().querySelector('textarea'));
+  textArea.scrollTop = 0;
+  textArea.setSelectionRange(0, 0);
+  this.chipHolder_.focus();
+  if (this.chipHolder_.hasChildren()) {
+    // Double focus() workarounds a bug that prevents the caret from being
+    // displayed in Chrome if setSelectionRange() is used.
+    textArea.focus();
+  }
 };
 
 
@@ -365,14 +405,9 @@ promptPanels.EncryptSign.prototype.encryptSign_ = function() {
     textArea.disabled = true;
     textArea.value = encrypted;
     this.chipHolder_.lock();
-    var passphraseEncryptionLink = goog.dom.getElement(
-        constants.ElementId.PASSPHRASE_ENCRYPTION_LINK);
-    goog.dom.classlist.add(
-        passphraseEncryptionLink, constants.CssClass.INVISIBLE);
     var signCheckbox = goog.dom.getElement(
         constants.ElementId.SIGN_MESSAGE_CHECK);
     signCheckbox.disabled = true;
-    this.clearSavedDraft_(origin);
     this.renderDismiss();
     var insertButton = this.getElementByClass(constants.CssClass.INSERT);
     if (insertButton) {
@@ -392,67 +427,34 @@ promptPanels.EncryptSign.prototype.insertMessageIntoPage_ = function(origin) {
   var recipients = this.chipHolder_.getSelectedUids();
   var subject = goog.dom.getElement(constants.ElementId.SUBJECT) ?
       goog.dom.getElement(constants.ElementId.SUBJECT).value : undefined;
-  utils.action.updateSelectedContent(
-      textArea.value, recipients, origin, false,
-      goog.partial(goog.dispose, this.getParent()), this.errorCallback_,
+  var prompt = /** @type {e2e.ext.ui.Prompt} */ (this.getParent());
+  var shouldSend = false;
+  var content = this.getContent();
+  if (content && this.canSend_(content.origin)) {
+    shouldSend = true;
+  }
+  prompt.getHelperProxy().updateSelectedContent(
+      textArea.value, recipients, origin, shouldSend,
+      goog.partial(goog.dispose, this.getParent()),
+      goog.bind(this.errorCallback_, this),
       subject);
 };
 
 
 /**
- * Shows the Settings/Options page.
+ * Loads the content that the user has selected in the web application.
+ * @return {!goog.Promise} Promise resolved when content has been loaded.
+ *     It's never rejected.
  * @private
  */
-promptPanels.EncryptSign.prototype.showOptions_ = function() {
-  chrome.tabs.create({
-    url: 'settings.html',
-    active: false
-  }, goog.nullFunction);
-};
-
-
-/**
- * Loads the last saved draft. If none is available, loads the content that the
- * user has selected.
- * @private
- */
-promptPanels.EncryptSign.prototype.loadSavedDraftOrSelectedContent_ =
-    function() {
-  var origin = this.getContent().origin;
-  var textArea = /** @type {HTMLTextAreaElement} */
-      (this.getElement().querySelector('textarea'));
-  if (drafts.hasDraft(origin)) {
-    var dialog = new dialogs.Generic(
-        chrome.i18n.getMessage('promptEncryptSignRestoreDraftMsg'),
-        goog.bind(function(dialogResult) {
-          if (goog.isDef(dialogResult)) {
-            // A passed object signals that the user has clicked the
-            // 'OK' button.
-            var draft = drafts.getDraft(origin);
-            this.actionExecutor_.execute( /** @type {!messages.ApiRequest} */ ({
-              action: constants.Actions.DECRYPT_VERIFY,
-              content: draft,
-              passphraseCallback: goog.bind(this.renderPassphraseDialog, this)
-            }), this, goog.bind(function(decrypted) {
-              textArea.value = decrypted;
-              this.renderDismiss();
-            }, this));
-          } else {
-            drafts.clearDraft(origin);
-          }
-
-          goog.dispose(dialog);
-        }, this),
-        dialogs.InputType.NONE,
-        '',
-        chrome.i18n.getMessage('promptEncryptSignRestoreDraftLabel'),
-        chrome.i18n.getMessage('promptEncryptSignDiscardDraftLabel'));
-    this.renderDialog(dialog);
-  } else {
+promptPanels.EncryptSign.prototype.loadSelectedContent_ = function() {
+  return new goog.Promise(function(resolve, reject) {
+    var origin = this.getContent().origin;
+    var textArea = /** @type {HTMLTextAreaElement} */
+        (this.getElement().querySelector('textarea'));
     var content = this.getContent().selection || '';
-    var sniffedAction = utils.text.getPgpAction(
-        content, preferences.isActionSniffingEnabled());
-    if (sniffedAction == constants.Actions.DECRYPT_VERIFY) {
+    var detectedAction = utils.text.getPgpAction(content);
+    if (detectedAction == constants.Actions.DECRYPT_VERIFY) {
       this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
         action: constants.Actions.DECRYPT_VERIFY,
         content: content,
@@ -463,15 +465,21 @@ promptPanels.EncryptSign.prototype.loadSavedDraftOrSelectedContent_ =
         } else {
           this.renderReply_(textArea, decrypted);
         }
+        resolve();
+      }, this), goog.bind(function(error) {
+        this.errorCallback_(error);
+        resolve();
       }, this));
+    } else {
+      resolve();
     }
-  }
+  }, this);
 };
 
 
 /**
- * Encrypts the current draft and persists it into the web app that the user is
- * interacting with.
+ * Encrypts the current draft and persists it into the web application that the
+ * user is interacting with.
  * @param {string} origin The web origin where the message was created.
  * @param {goog.events.Event} evt The event that triggers the saving of the
  *     draft.
@@ -482,22 +490,22 @@ promptPanels.EncryptSign.prototype.saveDraft_ = function(origin, evt) {
       (this.getElement().querySelector('textarea'));
   var subject = goog.dom.getElement(constants.ElementId.SUBJECT) ?
       goog.dom.getElement(constants.ElementId.SUBJECT).value : undefined;
+  var signer = goog.dom.getElement(constants.ElementId.SIGNER_SELECT).value;
   this.actionExecutor_.execute(/** @type {!messages.ApiRequest} */ ({
     action: constants.Actions.ENCRYPT_SIGN,
     content: formText.value,
-    currentUser: goog.dom.getElement(constants.ElementId.SIGNER_SELECT).value
+    recipients: [signer],
+    currentUser: signer
   }), this, goog.bind(function(encrypted) {
     var draft = e2e.openpgp.asciiArmor.markAsDraft(encrypted);
-    if (evt.type == goog.events.EventType.CLICK) {
-      utils.action.updateSelectedContent(
-          draft, [], origin, true, goog.nullFunction,
-          this.errorCallback_, subject);
-    } else {
-      drafts.saveDraft(draft, origin);
-    }
+    // Inject the draft into website.
+    var prompt = /** @type {e2e.ext.ui.Prompt} */ (this.getParent());
+    var shouldSend = false;
+    prompt.getHelperProxy().updateSelectedContent(
+        draft, [], origin, shouldSend, goog.nullFunction,
+        goog.bind(this.errorCallback_, this), subject);
   }, this), goog.bind(function(error) {
-    if (evt.type == goog.events.EventType.CLICK &&
-        error.messageId == 'promptNoEncryptionTarget') {
+    if (error.messageId == 'promptNoEncryptionTarget') {
       var dialog = new dialogs.Generic(
           chrome.i18n.getMessage('promptNoEncryptionKeysFound'),
           function() {
@@ -511,15 +519,5 @@ promptPanels.EncryptSign.prototype.saveDraft_ = function(origin, evt) {
   }, this));
 };
 
-
-/**
- * Clears the saved draft and disables auto-save.
- * @param {string} origin The origin for which the drafts are to be removed.
- * @private
- */
-promptPanels.EncryptSign.prototype.clearSavedDraft_ = function(origin) {
-  this.autoSaveTimer_.stop();
-  drafts.clearDraft(origin);
-};
 
 });  // goog.scope

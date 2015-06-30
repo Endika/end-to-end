@@ -27,6 +27,7 @@ goog.require('e2e.ext.constants');
 goog.require('e2e.ext.utils.text');
 goog.require('goog.array');
 goog.require('goog.dom');
+goog.require('goog.testing.AsyncTestCase');
 goog.require('goog.testing.MockControl');
 goog.require('goog.testing.PropertyReplacer');
 goog.require('goog.testing.asserts');
@@ -35,6 +36,7 @@ goog.require('goog.testing.mockmatchers.ArgumentMatcher');
 goog.require('goog.testing.mockmatchers.SaveArgument');
 goog.setTestOnly();
 
+var asyncTestCase = goog.testing.AsyncTestCase.createAndInstall(document.title);
 var constants = e2e.ext.constants;
 var helper = null;
 var mockControl = null;
@@ -68,7 +70,7 @@ function testSetValue() {
   helper.setValue_({
     recipients: [],
     response: true,
-    detach: true,
+    send: true,
     value: '<b>\n</b>',
     origin: helper.getOrigin_()
   }, function(isSuccess) {
@@ -86,7 +88,7 @@ function testErrorHandler() {
   helper.setValue_({
     recipients: [],
     response: true,
-    detach: true,
+    send: true,
     value: '<b>\n</b>',
     origin: helper.getOrigin_()
   }, function(error) {
@@ -110,12 +112,12 @@ function testDisplay() {
   var callbackMock = mockControl.createFunctionMock();
   var callbackArg =
       new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
-    assertEquals(constants.Actions.ENCRYPT_SIGN, arg.action);
-    assertEquals(selectionBody, arg.selection);
-    assertTrue(goog.array.equals(recipients, arg.recipients));
+        assertEquals(constants.Actions.ENCRYPT_SIGN, arg.action);
+        assertEquals(selectionBody, arg.selection);
+        assertTrue(goog.array.equals(recipients, arg.recipients));
 
-    return true;
-  });
+        return true;
+      });
 
   callbackMock(callbackArg);
 
@@ -149,7 +151,7 @@ function testEnableLookingGlass() {
 
   stubs.setPath(
       'e2e.ext.utils.text.getPgpAction', mockControl.createFunctionMock());
-  e2e.ext.utils.text.getPgpAction(selectionBody, true)
+  e2e.ext.utils.text.getPgpAction(selectionBody)
       .$returns(constants.Actions.DECRYPT_VERIFY);
 
   stubs.setPath('chrome.runtime.getURL', mockControl.createFunctionMock());
@@ -171,4 +173,33 @@ function testEnableLookingGlass() {
   assertNotNull(contentElem.querySelector('iframe'));
   mockControl.$verifyAll();
   document.body.removeChild(contentElem);
+}
+
+function testWebsiteRequests() {
+  stubs.setPath('chrome.runtime.sendMessage', function(target, message) {
+    assertEquals('test', target);
+    assertEquals('body', message.selection);
+    assertEquals(location.origin, message.origin);
+    assertEquals(true, message.canSaveDraft);
+    assertEquals(true, message.canInject);
+    assertEquals('test subject', message.subject);
+    assertEquals(true, message.request);
+    assertArrayEquals(['example@example.com'], message.recipients);
+    helper.disableWebsiteRequests();
+    assertNull(helper.api_.websiteRequestForwarder_);
+    asyncTestCase.continueTesting();
+  });
+  stubs.setPath('chrome.runtime.id', 'test');
+
+  helper.enableWebsiteRequests();
+  asyncTestCase.waitForAsync('Waiting for request processing');
+  helper.api_.websiteRequestForwarder_({
+    id: 'foo',
+    call: 'openCompose',
+    args: {
+      body: 'body',
+      recipients: ['example@example.com'],
+      subject: 'test subject'
+    }
+  });
 }

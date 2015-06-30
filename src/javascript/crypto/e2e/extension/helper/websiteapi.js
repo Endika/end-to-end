@@ -23,10 +23,11 @@ goog.provide('e2e.ext.WebsiteApi.EmailAddressDescriptor');
 goog.provide('e2e.ext.WebsiteApi.Request');
 goog.provide('e2e.ext.WebsiteApi.Response');
 
+goog.require('e2e.ext.utils.CallbacksMap');
 goog.require('e2e.ext.utils.text');
 goog.require('goog.array');
 goog.require('goog.object');
-goog.require('goog.string');
+goog.require('goog.structs.Map');
 
 
 
@@ -36,10 +37,23 @@ goog.require('goog.string');
 e2e.ext.WebsiteApi = function() {
   /**
    * Object storing response callbacks for API calls in progress
-   * @type {!Object.<string, {callback:function(*), errback:function(Error)}>}
+   * @type {!e2e.ext.utils.CallbacksMap}
    * @private
    */
-  this.pendingCallbacks_ = {};
+  this.pendingCallbacks_ = new e2e.ext.utils.CallbacksMap();
+  /**
+   * Map for storing the stub file contents.
+   * @type {!goog.structs.Map<string, string>}
+   * @private
+   */
+  this.stubContents_ = new goog.structs.Map();
+  /**
+   * Function sending the requests from the web application to the extension.
+   * Null if web application requests are not supported.
+   * @type {?function(!e2e.ext.WebsiteApi.Request)}
+   * @private
+   */
+  this.websiteRequestForwarder_ = null;
 };
 
 
@@ -184,7 +198,7 @@ e2e.ext.WebsiteApi.prototype.supportsApi_ = function(origin) {
  * @param {Object=} opt_args The arguments to pass to the Website API.
  * @private
  */
-e2e.ext.WebsiteApi.prototype.sendWebsiteRequest_ = function(call, callback,
+e2e.ext.WebsiteApi.prototype.sendEndToEndRequest_ = function(call, callback,
     errback, opt_args) {
   var requestId;
   var port = this.port_;
@@ -193,10 +207,7 @@ e2e.ext.WebsiteApi.prototype.sendWebsiteRequest_ = function(call, callback,
     return;
   }
 
-  do {
-    requestId = goog.string.getRandomString();
-  } while (goog.object.containsKey(this.pendingCallbacks_, requestId));
-  this.pendingCallbacks_[requestId] = {callback: callback, errback: errback};
+  requestId = this.pendingCallbacks_.addCallbacks(callback, errback);
   var request = {
     id: requestId,
     call: call,
@@ -231,8 +242,15 @@ e2e.ext.WebsiteApi.prototype.bootstrapChannelWithStub_ = function(stubFilename,
     onPortReadyCallback(/** @type {boolean} */ (this.apiAvailable_));
     return;
   }
+  // NOTE(koto): If this code is embedded in a webview, app resources are not
+  // available, even with appropriate accessible_resources entry in the
+  // manifest. They can't be loaded with XHR too.
   var script = document.createElement('script');
-  script.src = chrome.runtime.getURL(stubFilename);
+  if (this.stubContents_.containsKey(stubFilename)) {
+    script.textContent = this.stubContents_.get(stubFilename);
+  } else {
+    script.src = chrome.runtime.getURL(stubFilename);
+  }
   document.documentElement.appendChild(script);
   this.stubInjected_ = true;
   setTimeout(goog.bind(this.bootstrapChannel_, this, onPortReadyCallback),
@@ -266,14 +284,15 @@ e2e.ext.WebsiteApi.prototype.bootstrapChannel_ = function(onPortReadyCallback) {
       }
       bootstrapReceived = true;
       this.port_ = msgEvent.target;
-      this.apiAvailable_ = msgEvent.data.available;
+      this.apiAvailable_ = Boolean(msgEvent.data.available);
       if (msgEvent.target) {
         msgEvent.target.addEventListener('message',
             goog.bind(this.processWebsiteMessage_, this));
       }
       onPortReadyCallback(this.apiAvailable_);
       if (this.apiAvailable_) {
-        this.sendWebsiteRequest_('ready', goog.nullFunction, goog.nullFunction);
+        this.sendEndToEndRequest_('ready', goog.nullFunction,
+            goog.nullFunction);
       }
     }
   }, this);
@@ -336,14 +355,71 @@ e2e.ext.WebsiteApi.prototype.processWebsiteMessage_ = function(event) {
 
 
 /**
+ * @param {?function(!e2e.ext.WebsiteApi.Request)} forwarder Function
+ *     sending the web application request to the extension.
+ */
+e2e.ext.WebsiteApi.prototype.setWebsiteRequestForwarder = function(forwarder) {
+  this.websiteRequestForwarder_ = forwarder;
+};
+
+
+/**
  * Handles an incoming Website API request.
  * @param  {MessagePort} port Port to send the response to.
  * @param  {e2e.ext.WebsiteApi.Request} request Incoming request.
  * @private
  */
 e2e.ext.WebsiteApi.prototype.handleWebsiteRequest_ = function(port, request) {
-  // For now, no incoming requests are supported.
-  this.sendWebsiteErrorResponse_(port, request, 'Not supported.');
+  if (!request.id) {
+    return; // Ignore the request.
+  }
+  if (!goog.isFunction(this.websiteRequestForwarder_)) {
+    this.sendEndToEndErrorResponse(request.id,
+        'Web application originating requests are not supported.');
+    return;
+  }
+  if (!request.call) {
+    this.sendEndToEndErrorResponse(request.id, 'Invalid request.');
+    return;
+  }
+  var validatedRequest;
+  switch (request.call) {
+    case 'openCompose':
+      validatedRequest = this.validateOpenCompose_(request);
+      break;
+  }
+  if (!validatedRequest) {
+    this.sendEndToEndErrorResponse(request.id, 'Invalid request.');
+    return;
+  }
+  this.websiteRequestForwarder_(validatedRequest);
+};
+
+
+/**
+ * Validates the openCompose request originated from the web application.
+ * @param  {e2e.ext.WebsiteApi.Request} request Incoming request.
+ * @return {e2e.ext.WebsiteApi.Request} Validated request.
+ * @private
+ */
+e2e.ext.WebsiteApi.prototype.validateOpenCompose_ = function(request) {
+  var validatedRequest = /** @type {e2e.ext.WebsiteApi.Request} */ ({});
+
+  validatedRequest.id = request.id;
+  validatedRequest.call = request.call;
+  validatedRequest.args = {};
+  if (!goog.isDefAndNotNull(request.args)) {
+    request.args = {};
+  }
+  var recipients = [];
+  goog.array.extend(recipients,
+      e2e.ext.WebsiteApi.getEmailsFromAddressDescriptors_(request.args['to']),
+      e2e.ext.WebsiteApi.getEmailsFromAddressDescriptors_(request.args['cc'])
+  );
+  validatedRequest.args.recipients = recipients;
+  validatedRequest.args.body = request.args.body || '';
+  validatedRequest.args.subject = request.args.subject;
+  return validatedRequest;
 };
 
 
@@ -354,33 +430,46 @@ e2e.ext.WebsiteApi.prototype.handleWebsiteRequest_ = function(port, request) {
  * @private
  */
 e2e.ext.WebsiteApi.prototype.processWebsiteResponse_ = function(response) {
-  if (!goog.object.containsKey(this.pendingCallbacks_, response.requestId)) {
+  try {
+    var callbacks = this.pendingCallbacks_.getAndRemove(response.requestId);
+    if (goog.object.containsKey(response, 'error')) {
+      callbacks.errback(new Error(response.error));
+    } else {
+      callbacks.callback(response.result);
+    }
+    return true;
+  } catch (e) {
     return false;
   }
-  var callbacks = this.pendingCallbacks_[response.requestId];
-  delete this.pendingCallbacks_[response.requestId];
-  if (goog.object.containsKey(response, 'error')) {
-    callbacks.errback(new Error(response.error));
-  } else {
-    callbacks.callback(response.result);
-  }
-  return true;
 };
 
 
 /**
  * Sends an error response for a web application initiated API request.
- * @param  {MessagePort} port Port to send the response to.
- * @param  {e2e.ext.WebsiteApi.Request} request Incoming request.
+ * @param  {string} requestId The request ID.
  * @param {string} errorMessage The error message.
- * @private
  */
-e2e.ext.WebsiteApi.prototype.sendWebsiteErrorResponse_ = function(port,
-    request, errorMessage) {
-  port.postMessage({
+e2e.ext.WebsiteApi.prototype.sendEndToEndErrorResponse = function(requestId,
+    errorMessage) {
+  this.port_.postMessage({
     error: errorMessage,
     result: null,
-    requestId: request.id
+    requestId: requestId
+  });
+};
+
+
+/**
+ * Sends a response to web application request.
+ * @param  {string} requestId The request ID.
+ * @param  {*} response Response.
+ */
+e2e.ext.WebsiteApi.prototype.sendEndToEndResponse = function(requestId,
+    response) {
+  this.port_.postMessage({
+    error: null,
+    result: response,
+    requestId: requestId
   });
 };
 
@@ -430,12 +519,12 @@ e2e.ext.WebsiteApi.getAddressDescriptorsFromEmails_ = function(recipients) {
  * @param {!function(string=,string=)} callback The callback where the element
  *     containing the last selected message should be passed.
  * @param {function(Error)} errback The function that will be called upon error.
- * @expose
+ * @export
  */
 e2e.ext.WebsiteApi.prototype.getCurrentMessage = function(callback, errback) {
   this.isApiAvailable_(goog.bind(function(available) {
     if (available) {
-      this.sendWebsiteRequest_('getCurrentMessage', function(result) {
+      this.sendEndToEndRequest_('getCurrentMessage', function(result) {
         if (!result) {
           callback(undefined, undefined);
         } else {
@@ -458,7 +547,7 @@ e2e.ext.WebsiteApi.prototype.getCurrentMessage = function(callback, errback) {
  * @private
  */
 e2e.ext.WebsiteApi.prototype.getActiveDraft_ = function(callback, errback) {
-  this.sendWebsiteRequest_('getActiveDraft', function(result) {
+  this.sendEndToEndRequest_('getActiveDraft', function(result) {
     var recipients = [];
     var body = '';
     var subject;
@@ -481,7 +570,7 @@ e2e.ext.WebsiteApi.prototype.getActiveDraft_ = function(callback, errback) {
  * @private
  */
 e2e.ext.WebsiteApi.prototype.hasActiveDraft_ = function(callback, errback) {
-  this.sendWebsiteRequest_('hasActiveDraft', callback, errback);
+  this.sendEndToEndRequest_('hasActiveDraft', callback, errback);
 };
 
 
@@ -490,6 +579,8 @@ e2e.ext.WebsiteApi.prototype.hasActiveDraft_ = function(callback, errback) {
  * @param {!Array.<string>} recipients E-mail addresses of the recipients of
  *     the message.
  * @param {string} msgBody The content body of the message.
+ * @param  {boolean} shouldSend Iff true, instruct the web application to send
+ *     the new content to the intended recipients.
  * @param {function(boolean)} callback A callback to invoke once the draft's
  *     contents have been set.
  * @param {function(Error)} errback The function that will be called upon error.
@@ -497,15 +588,16 @@ e2e.ext.WebsiteApi.prototype.hasActiveDraft_ = function(callback, errback) {
  * @private
  */
 e2e.ext.WebsiteApi.prototype.setActiveDraft_ = function(recipients, msgBody,
-    callback, errback, opt_subject) {
+    shouldSend, callback, errback, opt_subject) {
   var message = {
     to: e2e.ext.WebsiteApi.getAddressDescriptorsFromEmails_(recipients),
-    body: msgBody
+    body: msgBody,
+    send: shouldSend
   };
   if (goog.isDef(opt_subject)) {
     message.subject = opt_subject;
   }
-  this.sendWebsiteRequest_('setActiveDraft', callback, errback, message);
+  this.sendEndToEndRequest_('setActiveDraft', callback, errback, message);
 };
 
 
@@ -514,7 +606,7 @@ e2e.ext.WebsiteApi.prototype.setActiveDraft_ = function(recipients, msgBody,
  * @param  {!function(!Array.<string>,string,boolean,string=)} callback A
  *     callback to process the results.
  * @param {function(Error)} errback The function that will be called upon error.
- * @expose
+ * @export
  */
 e2e.ext.WebsiteApi.prototype.getSelectedContent = function(callback, errback) {
   this.isApiAvailable_(goog.bind(function(available) {
@@ -576,19 +668,23 @@ e2e.ext.WebsiteApi.prototype.getSelectedContentDom_ = function(callback,
 
 
 /**
- * Updates currently selected content.
+ * Updates currently selected content, optionally instructing the web
+ * application to send it.
  * @param  {!Array.<!string>} recipients E-mail addresses of recipients.
  * @param  {string} value Message content.
+ * @param  {boolean} shouldSend Iff true, instruct the web application to send
+ *     the new content to the intended recipients.
  * @param  {function(boolean)} callback Callback to call after content has
  *     been updated.
  * @param {function(Error)} errback The function that will be called upon error.
  * @param {string=} opt_subject New subject of the message.
  */
 e2e.ext.WebsiteApi.prototype.updateSelectedContent = function(recipients, value,
-    callback, errback, opt_subject) {
+    shouldSend, callback, errback, opt_subject) {
   this.isApiAvailable_(goog.bind(function(available) {
     if (available) {
-      this.setActiveDraft_(recipients, value, callback, errback, opt_subject);
+      this.setActiveDraft_(recipients, value, shouldSend, callback, errback,
+          opt_subject);
     } else {
       this.updateSelectedContentDom_(value, callback, errback);
     }
@@ -662,4 +758,17 @@ e2e.ext.WebsiteApi.prototype.getActiveSelection_ = function() {
  */
 e2e.ext.WebsiteApi.prototype.isEditable_ = function(elem) {
   return goog.isDef(elem.value) || elem.contentEditable == 'true';
+};
+
+
+/**
+ * Sets the stub file contents. Used in the Chrome App in which the website
+ * cannot access chrome-extension:// URLs, so the stub file contents need to
+ * be supplied to  the content script.
+ * @param {string} stubUrl Stub file URL.
+ * @param {string} contents Stub file contents.
+ * @export
+ */
+e2e.ext.WebsiteApi.prototype.setStub = function(stubUrl, contents) {
+  this.stubContents_.set(stubUrl, contents);
 };

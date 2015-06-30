@@ -21,7 +21,6 @@
 
 goog.provide('e2e.ext.Helper');
 
-goog.require('e2e.ext.WebsiteApi');
 goog.require('e2e.ext.constants.Actions');
 goog.require('e2e.ext.ui.GlassWrapper');
 goog.require('e2e.ext.utils.text');
@@ -85,6 +84,8 @@ ext.Helper.prototype.activeViewListenerKey_ = null;
  * @param {!MessageSender} sender The sender of the request.
  * @param {!function(*)} sendResponse A callback function sending the response
  *     back.
+ * @return {boolean} Returns true to mark that the response is sent
+ *     asynchronously.
  * @private
  */
 ext.Helper.prototype.handleMessage_ = function(req, sender, sendResponse) {
@@ -93,7 +94,7 @@ ext.Helper.prototype.handleMessage_ = function(req, sender, sendResponse) {
   } else if (goog.object.containsKey(req, 'value')) {
     this.setValue_(req, sendResponse);
   }
-  return true; // Returns true to mark that the response is sent asynchronously.
+  return true;
 };
 
 
@@ -119,8 +120,9 @@ ext.Helper.prototype.disposeInternal = function() {
  * @private
  */
 ext.Helper.prototype.setValue_ = function(msg, sendResponse) {
-  this.api_.updateSelectedContent(msg.recipients, msg.value, sendResponse,
-      goog.bind(this.errorHandler_, this, sendResponse), msg.subject);
+  this.api_.updateSelectedContent(msg.recipients, msg.value, msg.send,
+      sendResponse, goog.bind(this.errorHandler_, this, sendResponse),
+      msg.subject);
 };
 
 
@@ -163,7 +165,13 @@ ext.Helper.prototype.getSelectedContent_ = function(req, sendResponse) {
       msgSubject) {
         var selectionBody =
             e2e.openpgp.asciiArmor.extractPgpBlock(msgBody);
-        var action = utils.text.getPgpAction(selectionBody, true);
+        var action = utils.text.getPgpAction(selectionBody);
+        // Correct action for draft and reply-to messages.
+        if (e2e.openpgp.asciiArmor.isDraft(selectionBody) ||
+            (recipients.length > 0 &&
+        action == constants.Actions.DECRYPT_VERIFY)) {
+          action = constants.Actions.ENCRYPT_SIGN;
+        }
         // Send response back to the extension.
         var response = /** @type {e2e.ext.messages.BridgeMessageRequest} */ ({
           selection: selectionBody,
@@ -172,7 +180,8 @@ ext.Helper.prototype.getSelectedContent_ = function(req, sendResponse) {
           request: true,
           origin: origin,
           subject: msgSubject,
-          canInject: Boolean(canInject)
+          canInject: Boolean(canInject),
+          canSaveDraft: Boolean(canInject)
         });
         sendResponse(response);
       }, goog.bind(this.errorHandler_, this, sendResponse));
@@ -199,7 +208,7 @@ ext.Helper.prototype.enableLookingGlass_ = function() {
     }
     var selectionBody = e2e.openpgp.asciiArmor.extractPgpBlock(
         messageElem.innerText);
-    var action = utils.text.getPgpAction(selectionBody, true);
+    var action = utils.text.getPgpAction(selectionBody);
     if (action == constants.Actions.DECRYPT_VERIFY) {
       var glass = new ui.GlassWrapper(messageElem);
       this.registerDisposable(glass);
@@ -240,10 +249,128 @@ ext.Helper.prototype.errorHandler_ = function(sendResponse, error) {
   sendResponse(error);
 };
 
-});  // goog.scope
 
-// Create the helper and start it.
-if (!!chrome.extension && !goog.isDef(window.helper)) {
-  /** @type {!e2e.ext.Helper} */
-  window.helper = new e2e.ext.Helper(new e2e.ext.WebsiteApi());
-}
+/**
+ * Handles requests sent from the Chrome App (Chrome App calls this function
+ * directly).
+ * @param {!e2e.ext.messages.GetSelectionRequest|
+ *     !e2e.ext.messages.BridgeMessageResponse} req The request.
+ * @param {string} requestId Identifier of the request to send it back in the
+ *     response.
+ * @export
+ */
+ext.Helper.prototype.handleAppRequest = function(req, requestId) {
+  // NOTE(koto): We pass an empty sender object. handleMessage_ does not
+  // validate the sender anyway, as it's only listening for messages from the
+  // current extension/app only.
+  this.handleMessage_(req, /** @type {!MessageSender} */ ({}),
+      goog.partial(this.sendResponse_, requestId));
+};
+
+
+/**
+ * Handles success responses to Website API requests sent from the Chrome App
+ * (Chrome App calls this function directly).
+ * @param {string} requestId The request ID.
+ * @param {*} response The response.
+ * @export
+ */
+ext.Helper.prototype.handleAppResponse = function(requestId, response) {
+  this.api_.sendEndToEndResponse(requestId, response);
+};
+
+
+/**
+ * Handles error responses to Website API requests sent from the Chrome App
+ * (Chrome App calls this function directly).
+ * @param {string} requestId The request ID.
+ * @param {string} errorMsg Error message.
+ * @export
+ */
+ext.Helper.prototype.handleAppErrorResponse = function(requestId, errorMsg) {
+  this.api_.sendEndToEndErrorResponse(requestId, errorMsg);
+};
+
+
+/**
+ * Sends a response to the extension by chrome.runtime.sendMessage
+ * @param {string} requestId Request ID
+ * @param {*} response Response
+ * @private
+ */
+ext.Helper.prototype.sendResponse_ = function(requestId, response) {
+  chrome.runtime.sendMessage(chrome.runtime.id, {
+    requestId: requestId,
+    response: response
+  });
+};
+
+
+/**
+ * Sends the request from the web application to the extension.
+ * @param  {e2e.ext.WebsiteApi.Request} request
+ * @private
+ */
+ext.Helper.prototype.sendWebsiteRequest_ = function(request) {
+  if (goog.object.containsKey(request, 'id') &&
+      !goog.object.containsKey(request, 'requestId')) {
+    switch (request.call) {
+      case 'openCompose':
+        chrome.runtime.sendMessage(chrome.runtime.id,
+            this.convertOpenComposeRequest_(request));
+        break;
+    }
+  }
+};
+
+
+/**
+ * Converts a WebsiteAPI request to BridgeMessageRequest.
+ * @param  {e2e.ext.WebsiteApi.Request} request
+ * @return {e2e.ext.messages.BridgeMessageRequest} Request
+ * @private
+ */
+ext.Helper.prototype.convertOpenComposeRequest_ = function(request) {
+  return /** @type {e2e.ext.messages.BridgeMessageRequest} */ ({
+    selection: request.args.body,
+    recipients: request.args.recipients,
+    action: utils.text.getPgpAction(request.args.body),
+    request: true,
+    origin: this.getOrigin_(),
+    subject: request.args.subject,
+    canInject: true,
+    canSaveDraft: true
+  });
+};
+
+
+/**
+ * Enables handling requests from web applications.
+ */
+ext.Helper.prototype.enableWebsiteRequests = function() {
+  this.api_.setWebsiteRequestForwarder(
+      goog.bind(this.sendWebsiteRequest_, this));
+};
+
+
+/**
+ * Disables handling requests from web applications (the default state).
+ */
+ext.Helper.prototype.disableWebsiteRequests = function() {
+  this.api_.setWebsiteRequestForwarder(null);
+};
+
+
+/**
+ * Sets the stub file contents for the Website API object. Used in the
+ * Chrome App in which the website cannot access chrome-extension:// URLs.
+ * @param {string} stubUrl Stub file URL.
+ * @param {string} contents Stub file contents.
+ * @export
+ */
+ext.Helper.prototype.setApiStub = function(stubUrl, contents) {
+  this.api_.setStub(stubUrl, contents);
+};
+
+
+});  // goog.scope

@@ -24,6 +24,9 @@
   var gmonkeyApi;
   // TODO(koto): Remove closure, add unit tests and make that a compiled script.
 
+  var lastDraftMessagesCount = null;
+
+  var requestId = 1; // Initial ID for web application-initiated requests.
 
   /**
    * Handles the bootstrap message coming from the extension.
@@ -112,6 +115,34 @@
         // Load the API
         gmonkeyApi = api;
         processApiRequest(port, request);
+        // The following function probes for newly-opened draft messages
+        // and sends an 'openCompose' Website API request when a new draft
+        // has been found. It's to workaround a yet-missing gmonkey
+        // functionality.
+        var draftMessagesHunter = function() {
+          var newCount = gmonkeyApi.getMainWindow().getOpenDraftMessages()
+              .length;
+          if (lastDraftMessagesCount !== null &&
+              newCount > lastDraftMessagesCount) {
+            setTimeout(function() {
+              // NOTE: Timeout to workaround a Gmail issue. Plaintext body is
+              // HTML for some time.
+              getDraft(function(draft) {
+                port.postMessage({
+                  id: String(requestId++),
+                  call: 'openCompose',
+                  args: {
+                    'to': draft.getToEmails(),
+                    'cc': draft.getCcEmails(),
+                    'body': draft.getPlainTextBody()
+                  }
+                });
+              });
+            }, 100); // Chosen experimentally.
+          }
+          lastDraftMessagesCount = newCount;
+        };
+        setInterval(draftMessagesHunter, 50);
       });
     }
   };
@@ -171,6 +202,10 @@
             draft.setSubject(args['subject']);
           }
 
+          if (args['send']) {
+            draft.send();
+          }
+
           sendResult(port, request, true);
         });
         break;
@@ -205,5 +240,4 @@
   };
 
   initChannel();
-
 }).call();

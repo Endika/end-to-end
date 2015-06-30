@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # // Copyright 2014 Google Inc. All rights reserved.
 # //
 # // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,34 +18,40 @@
 #  * @author koto@google.com (Krzysztof Kotowicz)
 #  */
 
+export JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF8
+
+type ant >/dev/null 2>&1 || {
+  echo >&2 "Ant is required to build End-To-End dependencies."
+  exit 1
+}
+type javac >/dev/null 2>&1 || {
+  echo >&2 "Java compiler is required to build End-To-End dependencies."
+  exit 1
+}
+jversion=$(java -version 2>&1 | grep version | awk -F '"' '{print $2}')
+if [[ $jversion < "1.7" ]]; then
+  echo "Java 1.7 or higher is required to build End-To-End."
+  exit 1
+fi
+
 if [ ! -d lib ]; then
   mkdir lib
 fi
 cd lib
 
-# checkout closure library
-if [ ! -d closure-library/.git ]; then
-  git clone --depth 1 https://github.com/google/closure-library/ closure-library
-fi
+git submodule init
+git submodule update
 
-# checkout zlib.js
-if [ ! -d zlib.js/.git ]; then
-  git clone --depth 1 https://github.com/imaya/zlib.js zlib.js
+# symlink typedarray
+if [ ! -d typedarray ]; then
   mkdir typedarray
   ln -s ../zlib.js/define/typedarray/use.js typedarray/use.js
-fi
-
-# checkout closure compiler
-if [ ! -d closure-compiler/.git ]; then
-  if [ -d closure-compiler ]; then # remove binary release directory
-    rm -rf closure-compiler
-  fi
-  git clone --depth 1 https://github.com/google/closure-compiler/ closure-compiler
 fi
 
 # build closure compiler
 if [ ! -f closure-compiler/build/compiler.jar ]; then
   cd closure-compiler
+  ant clean
   ant jar
   cd ..
 fi
@@ -57,13 +63,15 @@ if [ ! -d closure-templates-compiler ]; then
   rm closure-templates-for-javascript-latest.zip
 fi
 
-# checkout css compiler
-if [ ! -f closure-stylesheets-20111230.jar ]; then
-  curl https://closure-stylesheets.googlecode.com/files/closure-stylesheets-20111230.jar -O
+# build css compiler
+if [ ! -f lib/closure-stylesheets/build/closure-stylesheets.jar ]; then
+  cd closure-stylesheets
+  ant
+  cd ..
 fi
 
-if [ ! -f chrome_extensions.js ]; then
-  curl https://raw.githubusercontent.com/google/closure-compiler/master/contrib/externs/chrome_extensions.js -O
+if [ -f chrome_extensions.js ]; then
+  rm -f chrome_extensions.js
 fi
 
 # Temporary fix

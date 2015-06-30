@@ -43,7 +43,7 @@ goog.require('goog.array');
  * Representation of a Public-Key Encrypted Session-Key Packet (Tag 1).
  * As defined in RFC 4880 Section 5.1.
  * @param {number} version The Encrypted Session Key Packet version.
- * @param {!e2e.ByteArray} keyId The keyId of the public key.
+ * @param {!e2e.openpgp.KeyId} keyId The keyId of the public key.
  * @param {e2e.cipher.Algorithm} algorithm The public key algorithm.
  * @param {e2e.cipher.ciphertext.CipherText} encryptedKey The encrypted
  *     key material with values as MPIs.
@@ -145,6 +145,7 @@ e2e.openpgp.packet.PKEncryptedSessionKey.prototype.
       e2e.openpgp.constants.getId(this.algorithm));
   switch (this.algorithm) {
     case e2e.cipher.Algorithm.RSA:
+    case e2e.cipher.Algorithm.RSA_ENCRYPT:
       goog.array.extend(body, this.encryptedKey['c']);
       break;
     case e2e.cipher.Algorithm.ELGAMAL:
@@ -180,7 +181,8 @@ e2e.openpgp.packet.PKEncryptedSessionKey.construct = function(publicKey,
   m = m.concat(
       e2e.openpgp.calculateNumericChecksum(sessionKey));
   var encryptedResult;
-  if (publicKey.cipher.algorithm == e2e.cipher.Algorithm.RSA) {
+  if ((publicKey.cipher.algorithm == e2e.cipher.Algorithm.RSA) ||
+      (publicKey.cipher.algorithm == e2e.cipher.Algorithm.RSA_ENCRYPT)) {
     var cipher = /** @type {e2e.cipher.Rsa} */(publicKey.cipher);
     var rsaes = new e2e.scheme.Rsaes(cipher);
     encryptedResult = rsaes.encrypt(m);
@@ -216,6 +218,7 @@ e2e.openpgp.packet.PKEncryptedSessionKey.createPacketForKey_ =
   var encryptedKey;
   switch (publicKey.cipher.algorithm) {
     case e2e.cipher.Algorithm.RSA:
+    case e2e.cipher.Algorithm.RSA_ENCRYPT:
       encryptedKey = {
         'c': e2e.openpgp.Mpi.serialize(encrypted['c'])
       };
@@ -257,7 +260,7 @@ e2e.openpgp.packet.PKEncryptedSessionKey.parse = function(body) {
     throw new e2e.openpgp.error.ParseError(
         'Unknown PKESK packet version.');
   }
-  var keyId = body.splice(0, 8);
+  var keyId = /** @type {!e2e.openpgp.KeyId} */ (body.splice(0, 8));
   var algorithmId = body.shift();
   var algorithm = e2e.openpgp.constants.getAlgorithm(
       e2e.openpgp.constants.Type.PUBLIC_KEY, algorithmId);
@@ -265,6 +268,7 @@ e2e.openpgp.packet.PKEncryptedSessionKey.parse = function(body) {
       {});
   switch (algorithm) {
     case e2e.cipher.Algorithm.RSA:
+    case e2e.cipher.Algorithm.RSA_ENCRYPT:
       encryptedKey['c'] = e2e.openpgp.Mpi.parse(body);
       break;
     case e2e.cipher.Algorithm.ELGAMAL:

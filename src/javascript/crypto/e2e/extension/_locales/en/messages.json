@@ -19,6 +19,10 @@
     "message": "Decryption successful!",
     "description": "Message informing about a successful decryption of a message."
   },
+  "promptMessageNotEncryptedMsg": {
+    "message": "Message was not encrypted.",
+    "description": "Message informing that the message was not encrypted."
+  },
   "promptVerificationSuccessMsg": {
     "message": "Good signature(s) from $1.",
     "description": "Message informing about a successful signature verification."
@@ -43,21 +47,13 @@
     "message": "Insert into the compose window",
     "description": "A sentence fragment prompting the user whether to insert the encrypted/decrypted text into Gmail."
   },
+  "promptEncryptSignSendLabel": {
+    "message": "Send protected message",
+    "description": "A sentence fragment prompting the user to send a protected message."
+  },
   "promptEncryptSignSaveDraftLabel": {
     "message": "Save encrypted draft",
     "description": "A sentence fragment prompting the user to save the working draft into the visiting page."
-  },
-  "promptEncryptSignRestoreDraftMsg": {
-    "message": "You previously saved a draft. Would you liked to continue editing it?",
-    "description": "A sentence asking the user if the saved draft should be used."
-  },
-  "promptEncryptSignRestoreDraftLabel": {
-    "message": "Restore the draft",
-    "description": "A sentence fragment prompting the user to restore the saved draft."
-  },
-  "promptEncryptSignDiscardDraftLabel": {
-    "message": "Discard the draft",
-    "description": "A sentence fragment prompting the user to discard the saved draft."
   },
   "promptEncryptSignReplyHeader": {
     "message": "Original message",
@@ -84,7 +80,7 @@
     "description": "A verb prompting the user to import an OpenPGP key into End-To-End."
   },
   "promptImportKeyConfirmLabel": {
-    "message": "Do you want to import the following keys?",
+    "message": "Do you want to import the following keys?\n\nYou should verify (e.g. with a phone call) that the key owners displayed below use the same key fingerprints.",
     "description": "A sentence asking the user to confirm the key import."
   },
   "promptImportKeyVerifyLabel": {
@@ -110,6 +106,10 @@
   "glassCannotDecrypt": {
     "message": "Unable to decrypt contents. Please try reloading the page and clicking the End-To-End icon in the upper right corner of the screen.",
     "description": "A generic error message indicating that something went wrong while reading messages inline."
+  },
+  "actionLoading": {
+    "message": "Loading...",
+    "description": "A phrase inditating a loading process."
   },
   "actionUserSpecified": {
     "message": "Select an End-To-End action...",
@@ -139,6 +139,10 @@
     "message": "Menu",
     "description": "A noun describing where the menu is located."
   },
+  "actionOpenPopout": {
+    "message": "Open in a new window",
+    "description": "A short phrase describing opening a new window."
+  },
   "keyMgmtTitle": {
     "message": "Keyring management",
     "description": "A section title signaling that the displayed PGP keys are stored by the extension."
@@ -154,6 +158,10 @@
   "keyMgmtNoneLabel": {
     "message": "None",
     "description": "A noun indicating that there are no PGP keys to display."
+  },
+  "keyMgmtSignupPromptLabel": {
+      "message": "Sign up with another email address",
+      "description": "A sentence prompting the user sign up with another email address."
   },
   "keyMgmtImportKeyringLabel": {
     "message": "Import a keyring",
@@ -280,7 +288,7 @@
     "description": "The label to inform the user that he needs a private key to use signing/decryption functionality"
   },
   "promptEncryptionPassphraseMessage": {
-    "message": "Please enter a passphrase for this message.",
+    "message": "Please enter a passphrase for this message.\nAnyone who knows the passphrase will be able to read the message.",
     "description": "A sentence prompting the user to specify a passphrase for symmetric encryption."
   },
   "promptEncryptionPassphraseConfirmMessage": {
@@ -290,6 +298,10 @@
   "promptEncryptionPassphraseLink": {
     "message": "Protect with a passphrase",
     "description": "A sentence notifying the user where to enter passphrases for symmetric encryption."
+  },
+  "promptEncryptionPassphraseLinkTooltip": {
+    "message": "Protect the message with a passhrase. Anyone who knows the passphrase will be able to read the message.",
+    "description": "A sentence notifying the user what passphrase encryption does."
   },
   "promptPassphraseMask": {
     "message": "(passphrase)",
@@ -367,10 +379,6 @@
     "message": "Show the welcome window when the extension loads the next time.",
     "description": "A sentence prompting the user to disable the extension's welcome window."
   },
-  "preferenceActionSniffing": {
-    "message": "Always try to anticipate End-To-End action.",
-    "description": "A sentence prompting the user to prevent the extension from guessing the intended actions."
-  },
   "preferenceLookingGlass": {
     "message": "Show the decrypted text inside Gmail when possible.",
     "description": "A sentence prompting the user to enable the looking glass for Gmail."
@@ -394,6 +402,17 @@
   "dialogSelectAll": {
     "message": "Select all",
     "description": "A fragment indicating to the user to select all items in the dialog."
+  },
+  "interactionSuppressed": {
+    "message": "To start typing, tap left Ctrl-key. Everything you type will not be encrypted.",
+    "description": "A sentence explaining that the interaction with the web application is suppressed."
+  },
+  "interactionEnabled": {
+    "message": "Everything you type is now unencrypted. Tap left Ctrl-key to reenable secure mode.",
+    "description": "A sentence explaining that the interaction with the web application is enabled."
+  },
+  "keyFingerprintLabel": {
+    "message": "Key fingerprint",
+    "description": "The OpenPGP key fingerprint"
   }
-
 }

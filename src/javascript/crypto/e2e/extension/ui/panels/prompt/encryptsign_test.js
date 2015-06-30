@@ -21,19 +21,18 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.ui.panels.prompt.EncryptSignTest');
 
-goog.require('e2e.ext.Launcher');
+goog.require('e2e.ext.ExtensionLauncher');
 goog.require('e2e.ext.actions.DecryptVerify');
 goog.require('e2e.ext.actions.EncryptSign');
 goog.require('e2e.ext.actions.Executor');
 goog.require('e2e.ext.constants');
 goog.require('e2e.ext.testingstubs');
-goog.require('e2e.ext.ui.dialogs.Generic');
-goog.require('e2e.ext.ui.draftmanager');
 goog.require('e2e.ext.ui.panels.prompt.EncryptSign');
-goog.require('e2e.ext.ui.preferences');
 goog.require('e2e.ext.utils');
+goog.require('e2e.ext.utils.TabsHelperProxy');
 goog.require('e2e.ext.utils.action');
 goog.require('e2e.ext.utils.text');
+goog.require('e2e.openpgp.ContextImpl');
 goog.require('e2e.openpgp.asciiArmor');
 goog.require('goog.dom');
 goog.require('goog.testing.AsyncTestCase');
@@ -44,28 +43,29 @@ goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.ArgumentMatcher');
 goog.require('goog.testing.mockmatchers.SaveArgument');
-
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var asyncTestCase = goog.testing.AsyncTestCase.createAndInstall(document.title);
 asyncTestCase.stepTimeout = 2000;
 
 var constants = e2e.ext.constants;
-var drafts = e2e.ext.ui.draftmanager;
 var launcher = null;
 var mockControl = null;
-var preferences = e2e.ext.ui.preferences;
+var fakeStorage = null;
 var panel = null;
 var stubs = new goog.testing.PropertyReplacer();
 var utils = e2e.ext.utils;
 
 
 function setUp() {
-  window.localStorage.clear();
+  fakeStorage = new goog.testing.storage.FakeMechanism();
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
 
-  launcher = new e2e.ext.Launcher();
+  launcher = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      fakeStorage);
   launcher.start();
   stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: launcher});
@@ -74,6 +74,7 @@ function setUp() {
   panel = new e2e.ext.ui.panels.prompt.EncryptSign(
       new e2e.ext.actions.Executor(goog.nullFunction),
       'irrelevant',
+      launcher.getPreferences(),
       goog.nullFunction);
 
   if (!goog.dom.getElement(constants.ElementId.CALLBACK_DIALOG)) {
@@ -150,7 +151,9 @@ var PUBLIC_KEY_ASCII =
     '=nHBL\n' +
     '-----END PGP PUBLIC KEY BLOCK-----';
 
-var USER_ID_2 = 'Drew Hintz <adhintz@google.com>';
+var USER_ID_2_EMAIL = 'adhintz@google.com';
+
+var USER_ID_2 = 'Drew Hintz <' + USER_ID_2_EMAIL + '>';
 
 var PUBLIC_KEY_ASCII_2 =  // user ID of 'Drew Hintz <adhintz@google.com>'
     '-----BEGIN PGP PUBLIC KEY BLOCK-----\n' +
@@ -215,6 +218,10 @@ var PUBLIC_KEY_ASCII_2_EVIL = // Evil Drew Hintz <adhintz@google.com.evil.com>
     '=lo5W\n' +
     '-----END PGP PUBLIC KEY BLOCK-----';
 
+var ORIGIN = 'http://example.com';
+
+var PLAINTEXT = 'dummy message';
+
 
 function testRenderEncryptionPassphraseDialog() {
   var passphrase = 'test_passphrase';
@@ -256,8 +263,6 @@ function testRenderReply() {
 
 
 function testSaveDraftIntoPage() {
-  var origin = 'http://www.example.com';
-  var plaintext = 'plaintext message';
   var encrypted = 'header\n\nencrypted message';
   var subject = 'some subject';
 
@@ -267,7 +272,7 @@ function testSaveDraftIntoPage() {
   e2e.ext.actions.EncryptSign.prototype.execute(
       goog.testing.mockmatchers.ignoreArgument,
       new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
-        assertEquals(plaintext, arg.content);
+        assertEquals(PLAINTEXT, arg.content);
         return true;
       }),
       panel,
@@ -281,31 +286,40 @@ function testSaveDraftIntoPage() {
     return null;
   });
 
-  stubs.set(e2e.ext.utils.action, 'updateSelectedContent',
+  var helperProxy = new e2e.ext.utils.TabsHelperProxy(false);
+
+  stubs.replace(panel, 'getParent', function() {
+    return {
+      'getHelperProxy' : function() { return helperProxy; }
+    };
+  });
+
+  stubs.replace(helperProxy, 'updateSelectedContent',
       mockControl.createFunctionMock('updateSelectedContent'));
   var contentArg = new goog.testing.mockmatchers.SaveArgument(goog.isString);
   var subjectArg = new goog.testing.mockmatchers.SaveArgument(function(a) {
     return (!goog.isDef(a) || goog.isString(a));
   });
-  e2e.ext.utils.action.updateSelectedContent(contentArg, [], origin, true,
+  helperProxy.updateSelectedContent(contentArg, [], ORIGIN, false,
       goog.testing.mockmatchers.ignoreArgument,
       goog.testing.mockmatchers.ignoreArgument, subjectArg);
 
   mockControl.$replayAll();
   panel.setContentInternal({
     request: true,
-    selection: plaintext,
+    selection: PLAINTEXT,
     recipients: [USER_ID],
-    origin: origin,
-    subject: subject
+    origin: ORIGIN,
+    subject: subject,
+    canInject: true
   });
   panel.render(document.body);
   textArea = document.querySelector('textarea');
-  assertEquals(plaintext, textArea.value);
+  assertEquals(PLAINTEXT, textArea.value);
   subjectInput = document.getElementById(constants.ElementId.SUBJECT);
   assertEquals(subject, subjectInput.value);
 
-  panel.saveDraft_(origin, {type: 'click'});
+  panel.saveDraft_(ORIGIN, {});
   encryptCb.arg(encrypted);
   assertTrue(e2e.openpgp.asciiArmor.isDraft(contentArg.arg));
   assertContains('encrypted message', contentArg.arg);
@@ -315,8 +329,6 @@ function testSaveDraftIntoPage() {
 
 
 function testLoadDraftFromPage() {
-  var origin = 'http://www.example.com';
-  var plaintext = 'plaintext message';
   var encrypted = 'header\n\nencrypted message';
 
   var decryptCb = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
@@ -335,145 +347,24 @@ function testLoadDraftFromPage() {
 
   stubs.setPath('e2e.ext.utils.text.getPgpAction',
       mockControl.createFunctionMock());
-  e2e.ext.utils.text.getPgpAction(
-      goog.testing.mockmatchers.ignoreArgument, true).
+  e2e.ext.utils.text.getPgpAction(goog.testing.mockmatchers.ignoreArgument).
       $returns(constants.Actions.DECRYPT_VERIFY).$atLeastOnce();
 
   mockControl.$replayAll();
 
-  drafts.saveDraft(encrypted, origin);
   panel.setContentInternal({
     request: true,
     selection: e2e.openpgp.asciiArmor.markAsDraft(encrypted)
   });
   panel.render(document.body);
 
-  decryptCb.arg(plaintext);
-  assertEquals(plaintext, document.querySelector('textarea').value);
-  mockControl.$verifyAll();
-}
-
-
-function testSaveDraftLocalStorage() {
-  var origin = 'http://www.example.com';
-  var plaintext = 'plaintext message';
-  var encrypted = 'header\n\nencrypted message';
-
-  var encryptCb = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
-  stubs.setPath('e2e.ext.actions.EncryptSign.prototype.execute',
-      mockControl.createFunctionMock('encryptSign'));
-  e2e.ext.actions.EncryptSign.prototype.execute(
-      goog.testing.mockmatchers.ignoreArgument,
-      new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
-        assertEquals(plaintext, arg.content);
-        return true;
-      }),
-      panel,
-      encryptCb,
-      new goog.testing.mockmatchers.ArgumentMatcher(goog.isFunction));
-
-  stubs.replace(e2e.ext.utils.text, 'extractValidEmail', function(recipient) {
-    if (recipient == USER_ID) {
-      return recipient;
-    }
-    return null;
-  });
-
-  mockControl.$replayAll();
-
-  panel.setContentInternal({
-    request: true,
-    selection: plaintext,
-    recipients: [USER_ID],
-    origin: origin
-  });
-  panel.render(document.body);
-  textArea = document.querySelector('textarea');
-  assertEquals(plaintext, textArea.value);
-
-  panel.saveDraft_(origin, {type: 'non-click'});
-  encryptCb.arg(encrypted);
-  assertTrue(e2e.openpgp.asciiArmor.isDraft(drafts.getDraft(origin)));
-  assertContains('encrypted message', drafts.getDraft(origin));
-  mockControl.$verifyAll();
-}
-
-
-function testLoadDraftLocalStorage() {
-  var origin = 'http://www.example.com';
-  var plaintext = 'plaintext message';
-  var encrypted = 'encrypted message';
-
-  var decryptCb = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
-  stubs.setPath('e2e.ext.actions.DecryptVerify.prototype.execute',
-      mockControl.createFunctionMock('decryptVerify'));
-  e2e.ext.actions.DecryptVerify.prototype.execute(
-      goog.testing.mockmatchers.ignoreArgument,
-      new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
-        assertEquals(encrypted, arg.content);
-        return true;
-      }),
-      panel,
-      decryptCb,
-      new goog.testing.mockmatchers.ArgumentMatcher(goog.isFunction));
-
-  mockControl.$replayAll();
-
-  drafts.saveDraft(encrypted, origin);
-  panel.setContentInternal({
-    request: true,
-    selection: '',
-    origin: origin
-  });
-  panel.render(document.body);
-
-  for (var childIdx = 0; childIdx < panel.getChildCount(); childIdx++) {
-    var child = panel.getChildAt(childIdx);
-    if (child instanceof e2e.ext.ui.dialogs.Generic) {
-      child.dialogCallback_('');
-    }
-  }
-
-  decryptCb.arg(plaintext);
-  assertEquals(plaintext, document.querySelector('textarea').value);
-  mockControl.$verifyAll();
-}
-
-
-function testDiscardSavedDraft() {
-  var origin = 'http://www.example.com';
-  var encrypted = 'encrypted message';
-
-  var decryptCb = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
-  stubs.setPath('e2e.ext.actions.DecryptVerify.prototype.execute',
-      mockControl.createFunctionMock('decryptVerify'));
-
-  mockControl.$replayAll();
-
-  drafts.saveDraft(encrypted, origin);
-  panel.setContentInternal({
-    request: true,
-    selection: '',
-    origin: origin
-  });
-  panel.render(document.body);
-
-  for (var childIdx = 0; childIdx < panel.getChildCount(); childIdx++) {
-    var child = panel.getChildAt(childIdx);
-    if (child instanceof e2e.ext.ui.dialogs.Generic) {
-      child.dialogCallback_();
-    }
-  }
-
-  assertEquals('', document.querySelector('textarea').value);
-  assertFalse(drafts.hasDraft(origin));
+  decryptCb.arg(PLAINTEXT);
+  assertEquals(PLAINTEXT, document.querySelector('textarea').value);
   mockControl.$verifyAll();
 }
 
 
 function testSaveDraftNoKeys() {
-  var plaintext = 'a secret message';
-  var origin = 'http://www.example.com';
   stubs.set(e2e.ext.utils.action, 'updateSelectedContent',
       mockControl.createFunctionMock('updateSelectedContent'));
 
@@ -484,7 +375,7 @@ function testSaveDraftNoKeys() {
   e2e.ext.actions.EncryptSign.prototype.execute(
       goog.testing.mockmatchers.ignoreArgument,
       new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
-        assertEquals(plaintext, arg.content);
+        assertEquals(PLAINTEXT, arg.content);
         return true;
       }),
       panel,
@@ -495,33 +386,81 @@ function testSaveDraftNoKeys() {
 
   panel.setContentInternal({
     request: true,
-    selection: plaintext,
+    selection: PLAINTEXT,
     recipients: [],
-    origin: origin
+    origin: ORIGIN
   });
   panel.render(document.body);
 
   textArea = document.querySelector('textarea');
-  assertEquals(plaintext, textArea.value);
+  assertEquals(PLAINTEXT, textArea.value);
 
-  panel.saveDraft_(origin, {type: 'click'});
+  panel.saveDraft_(ORIGIN, {type: 'click'});
   encryptErrorCb.arg(new utils.Error('', 'promptNoEncryptionTarget'));
-  assertEquals(plaintext, textArea.value);
-  assertEquals('', drafts.getDraft(origin));
+  assertEquals(PLAINTEXT, textArea.value);
   mockControl.$verifyAll();
 }
 
 
+function testFocusWithRecipients() {
+  stubs.replace(panel.actionExecutor_, 'execute',
+      function(ignore, ignore2, callback) {
+        // Mock a public keyring with USER_ID_2 key.
+        var mockResults = {};
+        mockResults[USER_ID_2] = [{uids: USER_ID_2}];
+        callback(mockResults);
+      });
+  panel.setContentInternal({
+    request: true,
+    selection: PLAINTEXT,
+    recipients: [USER_ID_2_EMAIL],
+    origin: ORIGIN
+  });
+  panel.render(document.body);
+  asyncTestCase.waitForAsync('Waiting for rendering to finish.');
+  asyncTestCase.timeout(function() {
+    textArea = document.querySelector('textarea');
+    assertEquals(PLAINTEXT, textArea.value);
+    assertEquals(1, panel.chipHolder_.getChildCount());
+    assertTrue(panel.getElement().querySelector('textarea') ===
+        document.activeElement);
+    asyncTestCase.continueTesting();
+  }, 50);
+}
+
+
+function testFocusNoRecipients() {
+  stubs.replace(panel.actionExecutor_, 'execute',
+      function(ignore, ignore2, callback) {
+        callback({});
+      });
+  panel.setContentInternal({
+    request: true,
+    selection: PLAINTEXT,
+    recipients: [],
+    origin: ORIGIN
+  });
+  panel.render(document.body);
+  asyncTestCase.waitForAsync('Waiting for rendering to finish.');
+  asyncTestCase.timeout(function() {
+    textArea = document.querySelector('textarea');
+    assertEquals(PLAINTEXT, textArea.value);
+    assertEquals(0, panel.chipHolder_.getChildCount());
+    assertTrue(panel.chipHolder_.shadowInputElem_ === document.activeElement);
+    asyncTestCase.continueTesting();
+  }, 50);
+}
+
+
 function testOnlyExactAddressesMatch() {
-  var plaintext = 'irrelevant';
   launcher.getContext().importKey(goog.nullFunction, PUBLIC_KEY_ASCII_2);
   launcher.getContext().importKey(goog.nullFunction, PUBLIC_KEY_ASCII_2_EVIL);
 
   asyncTestCase.waitForAsync('Waiting for keys to be populated.');
-  window.setTimeout(function() {
+  asyncTestCase.timeout(function() {
     panel.setContentInternal({
       request: true,
-      selection: plaintext,
+      selection: PLAINTEXT,
       recipients: ['adhintz@google.com', 'a!weird@email.com']
     });
     panel.render(document.body);
@@ -530,4 +469,48 @@ function testOnlyExactAddressesMatch() {
         panel.chipHolder_.children_[0].getValue());
     asyncTestCase.continueTesting();
   }, 500);
+}
+
+
+function testUpdateButtonTextNoSend() {
+  panel.setContentInternal({
+    request: true,
+    selection: PLAINTEXT,
+    recipients: [],
+    origin: ORIGIN,
+    canInject: true
+  });
+  stubs.replace(panel, 'canSend_', function() {
+    return false;
+  });
+  panel.render(document.body);
+  asyncTestCase.waitForAsync('Waiting for rendering to finish.');
+  asyncTestCase.timeout(function() {
+    assertContains(
+        'promptEncryptSignInsertLabel', document.body.textContent);
+    asyncTestCase.continueTesting();
+  }, 50);
+}
+
+
+function testUpdateButtonTextSend() {
+  panel.setContentInternal({
+    request: true,
+    selection: PLAINTEXT,
+    recipients: [],
+    origin: ORIGIN,
+    canInject: true
+  });
+  stubs.replace(panel, 'canSend_', function() {
+    return true;
+  });
+  panel.render(document.body);
+  asyncTestCase.waitForAsync('Waiting for rendering to finish.');
+  asyncTestCase.timeout(function() {
+    assertNotContains(
+        'promptEncryptSignInsertLabel', document.body.textContent);
+    assertContains(
+        'promptEncryptSignSendLabel', document.body.textContent);
+    asyncTestCase.continueTesting();
+  }, 50);
 }

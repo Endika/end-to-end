@@ -64,9 +64,7 @@ e2e.ext.constants.Actions = {
  * @enum {string}
  */
 e2e.ext.constants.ElementId = {
-  HEADER: 'pgpHead',
   BODY: 'pgpBody',
-  TITLE: 'pgpTitle',
   MAIN_FORM: 'pgpMain',
   KEY_SELECT_FORM: 'pgpKeySelect',
   GENERATE_KEY_FORM: 'pgpGenerateKey',
@@ -74,6 +72,7 @@ e2e.ext.constants.ElementId = {
   SIGN_MESSAGE_CHECK: 'pgpSignMessage',
   SIGNER_SELECT: 'pgpSignerSelect',
   KEYRING_DIV: 'storedKeys',
+  SIGNUP_PROMPT: 'signupPrompt',
   KEYRING_IMPORT_DIV: 'keyringImportDiv',
   KEYRING_OPTIONS_DIV: 'keyringOptionsDiv',
   KEYRING_PASSPHRASE_CHANGE_DIV: 'keyringPassphraseChangeDiv',
@@ -81,13 +80,9 @@ e2e.ext.constants.ElementId = {
   ERROR_DIV: 'errorDiv',
   CALLBACK_DIALOG: 'callbackDialog',
   CHIP_HOLDER: 'chipHolder',
-  PASSPHRASE_ENCRYPTION_LINK: 'passphraseEncryptionLink',
   FROM_HOLDER: 'fromHolder',
   SUBJECT_HOLDER: 'subjectHolder',
   SUBJECT: 'subject',
-
-  /* Used to display menus in the UI. */
-  MENU_CONTAINER: 'menu-container',
 
   // Welcome page
   WELCOME_BODY: 'welcome-main',
@@ -101,7 +96,11 @@ e2e.ext.constants.ElementId = {
   WELCOME_FOOTER: 'welcome-footer',
 
   // Chrome notifications
-  NOTIFICATION_SUCCESS: 'e2e-success'
+  NOTIFICATION_SUCCESS: 'e2e-success',
+
+  // Website container
+  WEBVIEW: 'webview',
+  PROMPT: 'prompt'
 };
 
 
@@ -137,11 +136,13 @@ e2e.ext.constants.CssClass = {
   /* Used in the keyring management section. */
   EXPORT: 'export',
   REMOVE: 'remove',
+  KEY_INFO: 'key-info',
   KEY_FINGERPRINT: 'key-fingerprint',
   KEY_META: 'key-meta',
   KEY_TYPE_DESC: 'key-type-description',
   KEY_UID: 'key-uid',
   KEY_SUBKEY: 'key-sub',
+  SIGNUP_PROMPT: 'keyring-signup',
   KEYRING_IMPORT: 'keyring-import',
   KEYRING_EXPORT: 'keyring-export',
   KEYRING_BACKUP: 'keyring-backup',
@@ -152,24 +153,30 @@ e2e.ext.constants.CssClass = {
   KEYRING_RESTORE_EMAIL: 'keyring-restore-email',
   KEYRING_PASSPHRASE_CHANGE: 'keyring-passphrase-change',
 
-  /** Used in the welcome page */
+  /** Used in the welcome page. */
   WELCOME_MENU_ICON: 'welcome-menu-icon',
-  WELCOME_SUBSECTION_HEADER: 'welcome-subsection-header'
+  WELCOME_SUBSECTION_HEADER: 'welcome-subsection-header',
+
+  /** Used in prompt. */
+  PROMPT_HEADER: 'pgpHead',
+  PROMPT_TITLE: 'pgpTitle',
+  PROMPT_ACTIONS: 'pgpActions',
+  BUTTONS_CONTAINER: 'buttons-container',
+  MENU_BUTTON: 'menu-button',
+  POPOUT_BUTTON: 'popout-button',
+  PASSPHRASE_ENCRYPTION_LINK: 'passphraseEncryptionLink'
 };
 
 
 /**
- * The keys used to persist data into local storage.
- * If the key exists in localStorage, then the preference is set, regardless
- * of the value.
+ * The keys used to persist data into storage.
  * @enum {string}
  */
 e2e.ext.constants.StorageKey = {
   ENABLE_WELCOME_SCREEN: 'enable-welcome',
   ENABLE_ACTION_SNIFFING: 'enable-action-sniff',
-  ENABLE_AUTO_SAVE: 'enable-auto-save',
   ENABLE_LOOKING_GLASS: 'enable-looking-glass-feature',
-  LAST_SAVED_DRAFT: 'last-saved-draft'
+  PREFERENCES: 'PREF'
 };
 
 
@@ -178,13 +185,6 @@ e2e.ext.constants.StorageKey = {
  * @const
  */
 e2e.ext.constants.NOTIFICATIONS_DELAY = 10 * 1000;
-
-
-/**
- * The number of millis to wait before saving a draft message.
- * @const
- */
-e2e.ext.constants.AUTOSAVE_INTERVAL = 5 * 1000;
 
 
 /**

@@ -18,13 +18,13 @@
 <script src="test_js_deps-runfiles.js"></script>
 <script>
   goog.require('goog.array');
-  goog.require('goog.storage.mechanism.HTML5LocalStorage');
   goog.require('goog.testing.AsyncTestCase');
   goog.require('goog.testing.jsunit');
   goog.require('goog.testing.mockmatchers');
   goog.require('goog.testing.MethodMock');
   goog.require('goog.testing.MockControl');
   goog.require('goog.testing.PropertyReplacer');
+  goog.require('goog.testing.storage.FakeMechanism');
   goog.require('e2e.async.Result');
   goog.require('e2e.cipher.all');
   goog.require('e2e.hash.all');
@@ -142,9 +142,6 @@ vEIUQ7M7E9w=
 =j/2O
 -----END PGP PRIVATE KEY BLOCK-----
 </textarea>
-<textarea id="keyRingOldStyle">
-U{"pubKey":{"Drew Hintz &lt;adhintz@google.com>":["BFir2cUTCCqGSM49AwEHAgMERh6l2ToYyzlvyRSEqkZSAxrXy6TGs6TRFmAHwW4wtkRtYFoe+DyUbU5qodcyjAFFmVnNxTukBDOQOjPJiOFZ6A==","BFir2kMSCCqGSM49AwEHAgMEABY1dRP3D8aYyeFi0yha69rBMJi6JLZkgwpcd0rKVQDmZAnEhTFzdZUcD5JK2cx5Wj3eNTljHsqSl1F9/eGNkgMBCAc="],"Thai Duong &lt;thaidn@google.com>":["BF/3aSETCCqGSM49AwEHAgMEeFaL8yASJLutOZQcXTiCeMPEXCLI7aZlSC60qElzWe6YqJbiry5o9FdcONikInIbKvGXvBG3c67ySWk4qMwZUQ==","BF/3aesSCCqGSM49AwEHAgMEYqZrTdWnH8QCkbjAjurjIkXM8FPddwqs6Fblb1WElM335j8aIXssb+GFC3adXx6JuwmHUviFWoD/MktJLkn90gMBCAc="],"Radoslav Vasilev &lt;radi@google.com>":["BJ3LIAMTCCqGSM49AwEHAgMENtQtEEDfXseIscn+teabmX1TOlZLUT6J+Q1gjRgBhFAxJnOy+rWfzOBOUat83DES0HQoo1ELcZosDRqF7dMgjw==","BJ3LIMoSCCqGSM49AwEHAgMEIXahSRLiErNVpt8H0qvYx+5cvU8rOBssrgEVzBxssDcO7nIjMBfCP+8AOB/VH6+bGZfQYv/G/bwbgusfq0UPcQMBCAc="]},"privKey":{"Thai Duong &lt;thaidn@google.com>":["BF666PETCCqGSM49AwEHAgMELGfMoJnUCIQTFNMVYrInh2ux3nkSH8aBFt9sn1F5rrXlmcgHzTmL+mvTWgeKkITYrux947QLuiXC0diFgwUUowABAOqm8CXBp9ptapuKpuGuyoim1rPaPAUycscv4wOCzpowEk8=","BF666U8SCCqGSM49AwEHAgMEHTskqJhVrPhOfXonriZMHquDFIlUie5/uYYINb3G8L+V6ZFvNRiqq8G8Chv/PPL6s3i4yeHnek5HWFJghmN+wgMBCAcAAP9RL9VYjmZWE8Ox1Om1jaKwQsR3NeymhAFbHCWgHFJ+Cw/K"]}}
-</textarea>
 <!--
 :public key packet:
   version 4, algo 1, created 1409562854, expires 0
@@ -222,18 +219,25 @@ var storage;
 var stubs = new goog.testing.PropertyReplacer();
 
 function setUp() {
-  localStorage.clear();
-  storage = new goog.storage.mechanism.HTML5LocalStorage();
+  storage = new goog.testing.storage.FakeMechanism();
   keyRing = new e2e.openpgp.KeyRing('test', storage);
   mockControl = new goog.testing.MockControl();
 }
 
 function tearDown() {
-  localStorage.clear();
   stubs.reset();
   mockControl.$tearDown();
 }
 
+function getUidCertifications(uid) {
+  var ret = [];
+  uid.forEachSignature_(function(sig) {
+    if (sig.isCertificationSignature()) {
+      ret.push(sig);
+    }
+  });
+  return ret;
+}
 
 function testGeneration() {
   keyRing.generateKey(
@@ -254,8 +258,9 @@ function testGeneration() {
   assertEquals(1, pubKeys[1].userIds.length);
   var userIdPacket = pubKeys[1].userIds[0];
   assertEquals('<ecc@example.com>', userIdPacket.userId);
-  assertEquals(1, userIdPacket.getCertifications().length);
-  var certification = userIdPacket.getCertifications()[0];
+  var certs = getUidCertifications(userIdPacket);
+  assertEquals(1, certs.length);
+  var certification = certs[0];
   assertTrue(
       certification.attributes.PREFERRED_COMPRESSION_ALGORITHMS.length > 0);
   assertContains(
@@ -267,7 +272,7 @@ function testGeneration() {
   assertEquals(0x01, certification.attributes.FEATURES); // MDC
   assertTrue(Boolean(certification.attributes.KEY_FLAG_CERTIFY));
   assertTrue(Boolean(certification.attributes.KEY_FLAG_SIGN));
-  var bindingSig = ecdhPubKey.getBindingSignatures()[0];
+  var bindingSig = ecdhPubKey.bindingSignatures_.get(0);
   assertTrue(Boolean(bindingSig.attributes.KEY_FLAG_ENCRYPT_COMMUNICATION));
   assertTrue(Boolean(bindingSig.attributes.KEY_FLAG_ENCRYPT_STORAGE));
   assertArrayEquals(bindingSig.attributes.ISSUER, ecdsaPubKey.keyId);
@@ -285,13 +290,13 @@ function testGeneration() {
 
   var ecdsaPrivKey = privKeys[0].keyPacket;
   var ecdhPrivKey = privKeys[0].subKeys[0];
-  certification = privKeys[0].userIds[0].getCertifications()[0];
+  certification = getUidCertifications(privKeys[0].userIds[0])[0];
   assertEquals(e2e.signer.Algorithm.ECDSA, ecdsaPrivKey.cipher.algorithm);
   assertEquals(e2e.cipher.Algorithm.ECDH, ecdhPrivKey.cipher.algorithm);
   assertEquals(0x01, certification.attributes.FEATURES); // MDC
   assertTrue(Boolean(certification.attributes.KEY_FLAG_CERTIFY));
   assertTrue(Boolean(certification.attributes.KEY_FLAG_SIGN));
-  bindingSig = ecdhPrivKey.getBindingSignatures()[0];
+  bindingSig = ecdhPrivKey.bindingSignatures_.get(0);
   assertTrue(Boolean(bindingSig.attributes.KEY_FLAG_ENCRYPT_COMMUNICATION));
   assertTrue(Boolean(bindingSig.attributes.KEY_FLAG_ENCRYPT_STORAGE));
   assertArrayEquals(bindingSig.attributes.ISSUER, ecdsaPubKey.keyId);
@@ -487,7 +492,6 @@ function testGeneratePersist() {
 
 
 function testFailsWhenLocked() {
-  localStorage.clear();
   var publicKeyBlock = e2e.openpgp.block.factory.parseAscii(
     document.getElementById('pubKeyAscii').value);
   var keyRing1 = new e2e.openpgp.KeyRing('test', storage);
@@ -499,7 +503,7 @@ function testFailsWhenLocked() {
 
 
 function testImportPersistUnencrypted() {
-  localStorage.clear();
+  var storage = new goog.testing.storage.FakeMechanism();
   var publicKeyBlock = e2e.openpgp.block.factory.parseAscii(
     document.getElementById('pubKeyAscii').value);
   var keyRing1 = new e2e.openpgp.KeyRing('', storage);
@@ -569,7 +573,6 @@ function testPersistPrivKeys() {  // b/12100334
 
 
 function testImportPersistEncrypted() {
-  localStorage.clear();
   var publicKeyBlock = e2e.openpgp.block.factory.parseAscii(
     document.getElementById('pubKeyAscii').value);
   // Test encryption with no keys in the keyring.
@@ -656,31 +659,6 @@ function testImportPrivKey() {
       '<ecctest@example.com>');
 }
 
-
-function testLoadOldStyleKeyRing() {
-  localStorage.clear();
-  localStorage.setItem('UserKeyRing',
-      document.getElementById('keyRingOldStyle').value);
-  localStorage.setItem('enable-action-sniff', 'true');
-  localStorage.setItem('enable-auto-save', 'true');
-  localStorage.setItem('enable-welcome', 'false');
-  var keyRing1 = new e2e.openpgp.KeyRing('', storage);
-  keyRing1.changePassphrase('');
-  var uids = keyRing1.getAllKeys().getKeys().sort();
-  assertArrayEquals([
-    'Drew Hintz <adhintz@google.com>',
-    'Radoslav Vasilev <radi@google.com>',
-    'Thai Duong <thaidn@google.com>'], uids);
-  var secretUids = keyRing1.getAllKeys(true).getKeys().sort();
-  assertEquals('Thai Duong <thaidn@google.com>', secretUids[0]);
-  var thaiKeys = keyRing1.searchKey('Thai Duong <thaidn@google.com>');
-  assertNotNull(thaiKeys);
-  assertEquals(2, thaiKeys.length);
-  var thaiFp = thaiKeys[0].keyPacket.fingerprint;
-  assertArrayEquals([
-    0xaa, 0x09, 0x8a, 0x8e, 0xa4, 0x9e, 0xe5, 0xc2, 0x03, 0xfa,
-    0x40, 0x73, 0xf3, 0xa2, 0x8a,0xa9, 0xbd, 0x73, 0x34, 0xc7], thaiFp);
-}
 
 function testGetNextKey() {
   stubs.setPath('e2e.random.getRandomBytes', function(bytes) {

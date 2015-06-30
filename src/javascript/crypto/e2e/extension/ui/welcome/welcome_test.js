@@ -21,14 +21,16 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.ui.WelcomeTest');
 
-goog.require('e2e.ext.Launcher');
+goog.require('e2e.async.Result');
+goog.require('e2e.ext.ExtensionLauncher');
+goog.require('e2e.ext.Preferences');
 goog.require('e2e.ext.actions.GetKeyDescription');
 goog.require('e2e.ext.constants');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.ext.ui.Welcome');
 goog.require('e2e.ext.ui.dialogs.Generic');
-goog.require('e2e.ext.ui.preferences');
 goog.require('e2e.ext.utils');
+goog.require('e2e.openpgp.ContextImpl');
 goog.require('goog.dom');
 goog.require('goog.testing.AsyncTestCase');
 goog.require('goog.testing.MockControl');
@@ -37,15 +39,18 @@ goog.require('goog.testing.asserts');
 goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.SaveArgument');
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var constants = e2e.ext.constants;
 var launcher = null;
 var mockControl = null;
 var page = null;
-var preferences = e2e.ext.ui.preferences;
+var preferences = null;
+var fakeStorage = null;
 var stubs = new goog.testing.PropertyReplacer();
 var testCase = goog.testing.AsyncTestCase.createAndInstall();
+
 
 var PRIVATE_KEY_ASCII =
     '-----BEGIN PGP PRIVATE KEY BLOCK-----\n' +
@@ -110,10 +115,14 @@ function setUp() {
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
 
-  localStorage.clear();
+  fakeStorage = new goog.testing.storage.FakeMechanism();
+
+  preferences = new e2e.ext.Preferences(fakeStorage);
   preferences.setWelcomePageEnabled(false);
 
-  launcher = new e2e.ext.Launcher();
+  launcher = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      fakeStorage);
   stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: launcher});
   });
@@ -240,12 +249,15 @@ function testImportKeyring() {
 
 function testUpdateKeyringPassphrase() {
   page.decorate(document.documentElement);
-  stubs.set(launcher.pgpContext_, 'changeKeyRingPassphrase',
-      mockControl.createFunctionMock('changeKeyRingPassphrase'));
-  launcher.pgpContext_.changeKeyRingPassphrase('testPass');
+  stubs.set(launcher.pgpContext_, 'changeKeyRingPassphrase', function(pass) {
+    assertEquals('testPass', pass);
+    return e2e.async.Result.toResult(undefined);
+  });
 
   stubs.set(
-      launcher.pgpContext_, 'isKeyRingEncrypted', function() {return true;});
+      launcher.pgpContext_, 'isKeyRingEncrypted', function() {
+        return e2e.async.Result.toResult(true);
+      });
 
   mockControl.$replayAll();
   page.updateKeyringPassphrase_('testPass');
@@ -278,7 +290,7 @@ function testRenderPassphraseCallback() {
   mockControl.$replayAll();
 
   page.decorate(document.documentElement);
-  page.renderPassphraseCallback_('test_uid', callback);
+  page.renderPassphraseCallback_('test_uid').addCallback(callback);
 
   assertContains('test_uid', document.body.textContent);
   for (var childIdx = 0; childIdx < page.getChildCount(); childIdx++) {
@@ -295,11 +307,10 @@ function testRenderPassphraseCallback() {
 
 function populatePgpKeys() {
   var ctx = launcher.getContext();
-  ctx.importKey(function(uid, callback) {
-    console.debug(arguments);
-    callback('test');
+  ctx.importKey(function(uid) {
+    return e2e.async.Result.toResult('test');
   }, PRIVATE_KEY_ASCII);
 
-  ctx.importKey(function() {}, PUBLIC_KEY_ASCII);
+  ctx.importKey(goog.nullFunction, PUBLIC_KEY_ASCII);
 }
 

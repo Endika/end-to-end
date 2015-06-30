@@ -21,6 +21,7 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.actions.ListKeysTest');
 
+goog.require('e2e.async.Result');
 goog.require('e2e.ext.actions.ListKeys');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.openpgp.ContextImpl');
@@ -31,11 +32,13 @@ goog.require('goog.testing.asserts');
 goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.ArgumentMatcher');
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var mockControl = null;
 var stubs = new goog.testing.PropertyReplacer();
 var testCase = goog.testing.AsyncTestCase.createAndInstall(document.title);
+var storage;
 
 var USER_ID = 'test 4';
 
@@ -99,9 +102,9 @@ var PUBLIC_KEY_ASCII =
 
 
 function setUp() {
-  window.localStorage.clear();
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
+  storage = new goog.testing.storage.FakeMechanism();
 }
 
 
@@ -112,8 +115,9 @@ function tearDown() {
 
 
 function testExecuteEmpty() {
-  var pgpContext = new e2e.openpgp.ContextImpl();
-  pgpContext.setKeyRingPassphrase(''); // No passphrase.
+  var pgpContext = new e2e.openpgp.ContextImpl(storage);
+  // No passphrase.
+  e2e.async.Result.getValue(pgpContext.setKeyRingPassphrase(''));
 
   var errorCallback = mockControl.createFunctionMock('errorCallback');
   errorCallback(new goog.testing.mockmatchers.ArgumentMatcher(function(arg) {
@@ -135,8 +139,9 @@ function testExecuteEmpty() {
 
 
 function testExecutePublicKeys() {
-  var pgpContext = new e2e.openpgp.ContextImpl();
-  pgpContext.setKeyRingPassphrase(''); // No passphrase.
+  var pgpContext = new e2e.openpgp.ContextImpl(storage);
+  // No passphrase.
+  e2e.async.Result.getValue(pgpContext.setKeyRingPassphrase(''));
 
   var errorCallback = mockControl.createFunctionMock('errorCallback');
   var callback = mockControl.createFunctionMock('callback');
@@ -160,8 +165,9 @@ function testExecutePublicKeys() {
 
 
 function testExecutePrivateKeys() {
-  var pgpContext = new e2e.openpgp.ContextImpl();
-  pgpContext.setKeyRingPassphrase(''); // No passphrase.
+  var pgpContext = new e2e.openpgp.ContextImpl(storage);
+  // No passphrase.
+  e2e.async.Result.getValue(pgpContext.setKeyRingPassphrase(''));
 
   var errorCallback = mockControl.createFunctionMock('errorCallback');
   var callback = mockControl.createFunctionMock('callback');
@@ -173,8 +179,8 @@ function testExecutePrivateKeys() {
 
   mockControl.$replayAll();
   testCase.waitForAsync('Waiting for keys to be populated.');
-  pgpContext.importKey(function(uid, callback) {
-    callback('test');
+  pgpContext.importKey(function(uid) {
+    return e2e.async.Result.toResult('test');
   }, PRIVATE_KEY_ASCII).addCallback(function() {
     action.execute(pgpContext, {
       content: 'private'

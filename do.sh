@@ -26,9 +26,9 @@ cd ${0%/*}
 
 e2e_assert_dependencies() {
   # Check if required binaries are present.
-  type "$PYTHON_CMD" >/dev/null 2>&1 || { echo >&2 "Python is required to build End-To-End"; exit 1; }
-  type ant >/dev/null 2>&1 || { echo >&2 "Ant is required to build End-To-End"; exit 1; }
-  type java >/dev/null 2>&1 || { echo >&2 "Java is required to build End-To-End"; exit 1; }
+  type "$PYTHON_CMD" >/dev/null 2>&1 || { echo >&2 "Python is required to build End-To-End."; exit 1; }
+  type ant >/dev/null 2>&1 || { echo >&2 "Ant is required to build End-To-End."; exit 1; }
+  type java >/dev/null 2>&1 || { echo >&2 "Java is required to build End-To-End."; exit 1; }
   jversion=$(java -version 2>&1 | grep version | awk -F '"' '{print $2}')
   if [[ $jversion < "1.7" ]]; then
     echo "Java 1.7 or higher is required to build End-To-End."
@@ -39,9 +39,9 @@ e2e_assert_dependencies() {
     lib/closure-templates-compiler \
     lib/typedarray \
     lib/zlib.js \
-    lib/closure-stylesheets-20111230.jar \
+    lib/closure-stylesheets/build/closure-stylesheets.jar \
     lib/closure-compiler/build/compiler.jar \
-    lib/chrome_extensions.js \
+    lib/closure-compiler/contrib/externs/chrome_extensions.js \
   )
   for var in "${files[@]}"
   do
@@ -81,7 +81,7 @@ e2e_assert_templates() {
     # If cmp is unavailable, just ignore the check, instead of exiting
     type cmp >/dev/null 2>&1 && (e2e_get_file_cksum '*.soy' | cmp "$BUILD_TPL_DIR/cksum" - >/dev/null 2>&1) || true
     if [ -f "$BUILD_TPL_DIR/cksum" -a $? -eq 0 ] ; then
-      echo "Using previous template build - ./do.sh clean if you with to rebuild the templates."
+      echo "Using previous template build. Run ./do.sh clean if you want to rebuild the templates."
     else
       echo "Template files changed since last build. Rebuilding..."
       e2e_build_templates
@@ -95,24 +95,61 @@ e2e_assert_jsdeps() {
   fi
 }
 
-e2e_build_library() {
-  e2e_assert_dependencies
-  set -e
-  e2e_assert_jsdeps
-
-  BUILD_EXT_DIR="$BUILD_DIR/library"
-  echo "Building End-To-End library into $BUILD_EXT_DIR ..."
-  rm -rf "$BUILD_EXT_DIR"
-  mkdir -p "$BUILD_EXT_DIR"
-  SRC_DIRS=( src lib/closure-library lib/zlib.js/src lib/typedarray )
+e2e_build_closure_lib_() {
+  # $1 - Closure entry point
+  # $2 - Filename
+  # $3 - Additional source dir
+  # $4 - [debug|optimized]
+  ENTRY_POINT=$1
+  FNAME=$2
+  SRC_DIRS=( \
+    src \
+    lib/closure-library/closure/goog \
+    lib/closure-library/third_party/closure/goog \
+    lib/closure-templates-compiler lib/zlib.js/src \
+    lib/typedarray )
+  if [ -d "$3" ]; then
+    SRC_DIRS+=("$3")
+  fi
   jscompile_e2e="$JSCOMPILE_CMD"
   for var in "${SRC_DIRS[@]}"
   do
-    jscompile_e2e+=" --js='$var/**.js' --js='!$var/**_test.js'"
+    jscompile_e2e+=" --js='$var/**.js' --js='!$var/**_test.js' --js='!$var/**_perf.js'"
   done
-  jscompile_e2e+=" --js='!src/javascript/crypto/e2e/extension/*.js'"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.openpgp.ContextImpl" --js_output_file "$BUILD_EXT_DIR/end-to-end.compiled.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.openpgp.ContextImpl" --debug --formatting=PRETTY_PRINT --js_output_file "$BUILD_EXT_DIR/end-to-end.debug.js"
+  jscompile_e2e+=" --js='!lib/closure-library/closure/goog/demos/**.js'"
+  if [ "$4" == "debug" ]; then
+     jscompile_e2e+=" --debug --formatting=PRETTY_PRINT -O WHITESPACE_ONLY"
+  elif [ "$4" == "optimized" ]; then
+     jscompile_e2e+=" -O ADVANCED"
+  fi
+  echo -n "."
+  $jscompile_e2e --closure_entry_point "$ENTRY_POINT" --js_output_file "$FNAME"
+}
+
+e2e_build_jsmodule() {
+  echo "Building JS module $1 into $BUILD_DIR/$1.js..."
+  e2e_assert_dependencies
+  set -e
+  e2e_assert_jsdeps
+  mkdir -p "$BUILD_DIR"
+  if [ "$2" == "debug" ]; then
+    echo "Debug mode enabled"
+  fi
+  e2e_build_closure_lib_ $1 "$BUILD_DIR/$1.js" "" $2;
+  echo ""
+  echo "Done."
+}
+
+e2e_build_library() {
+  echo "Building End-To-End library into $BUILD_DIR/library..."
+  e2e_assert_dependencies
+  set -e
+  e2e_assert_jsdeps
+  BUILD_EXT_DIR="$BUILD_DIR/library"
+  rm -rf "$BUILD_EXT_DIR"
+  mkdir -p "$BUILD_EXT_DIR"
+  e2e_build_closure_lib_ "e2e.openpgp.ContextImpl" "$BUILD_EXT_DIR/end-to-end.compiled.js"
+  e2e_build_closure_lib_ "e2e.openpgp.ContextImpl" "$BUILD_EXT_DIR/end-to-end.debug.js" "" "debug"
   echo ""
   echo "Done."
 }
@@ -128,28 +165,18 @@ e2e_build_extension() {
   rm -rf "$BUILD_EXT_DIR"
   mkdir -p "$BUILD_EXT_DIR"
   SRC_EXT_DIR="src/javascript/crypto/e2e/extension"
-  SRC_DIRS=( src lib/closure-library lib/closure-templates-compiler $BUILD_TPL_DIR \
-    lib/zlib.js/src lib/typedarray )
-
-  jscompile_e2e="$JSCOMPILE_CMD"
-  for var in "${SRC_DIRS[@]}"
-  do
-    jscompile_e2e+=" --js='$var/**.js' --js='!$var/**_test.js'"
-  done
-  csscompile_e2e="java -jar lib/closure-stylesheets-20111230.jar src/javascript/crypto/e2e/extension/ui/styles/base.css"
+  if [ "$1" == "debug" ]; then
+    echo "Debug mode enabled"
+  fi
   # compile javascript files
   echo "Compiling JS files..."
-  if [ "$1" == "debug" ]; then
-    jscompile_e2e+=" --debug --formatting=PRETTY_PRINT"
-  fi
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.bootstrap" --js_output_file "$BUILD_EXT_DIR/launcher_binary.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.Helper" --js_output_file "$BUILD_EXT_DIR/helper_binary.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.ui.glass.bootstrap" --js_output_file "$BUILD_EXT_DIR/glass_binary.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.ui.Prompt" --js_output_file "$BUILD_EXT_DIR/prompt_binary.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.ui.Settings" --js_output_file "$BUILD_EXT_DIR/settings_binary.js"
-  echo -n "." && $jscompile_e2e --closure_entry_point "e2e.ext.ui.Welcome" --js_output_file "$BUILD_EXT_DIR/welcome_binary.js"
-  echo ""
+  e2e_build_closure_lib_ "e2e.ext.bootstrap" "$BUILD_EXT_DIR/launcher_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.helper.bootstrap" "$BUILD_EXT_DIR/helper_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.prompt.bootstrap" "$BUILD_EXT_DIR/prompt_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.settings.bootstrap" "$BUILD_EXT_DIR/settings_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.welcome.bootstrap" "$BUILD_EXT_DIR/welcome_binary.js" "$BUILD_TPL_DIR" "$1"
   # compile css files
+  csscompile_e2e="java -jar lib/closure-stylesheets/build/closure-stylesheets.jar src/javascript/crypto/e2e/extension/ui/styles/base.css"
   echo "Compiling CSS files..."
   $csscompile_e2e "$SRC_EXT_DIR/ui/glass/glass.css" > "$BUILD_EXT_DIR/glass_styles.css"
   $csscompile_e2e "$SRC_EXT_DIR/ui/prompt/prompt.css" > "$BUILD_EXT_DIR/prompt_styles.css"
@@ -161,7 +188,47 @@ e2e_build_extension() {
   cp -fr "$SRC_EXT_DIR/_locales" "$BUILD_EXT_DIR"
   find "$SRC_EXT_DIR/ui" -regex .*.html -not -regex .*_test.html -exec cp -f "{}" "$BUILD_EXT_DIR" \;
   cp -f "$SRC_EXT_DIR/helper/gmonkeystub.js" "$BUILD_EXT_DIR"
-  cp -f "$SRC_EXT_DIR/manifest.json" "$BUILD_EXT_DIR"
+  cp -f "$SRC_EXT_DIR/extension_manifest.json" "$BUILD_EXT_DIR/manifest.json"
+  echo "Done."
+}
+
+e2e_build_app() {
+  e2e_assert_dependencies
+  set -e
+  e2e_assert_jsdeps
+  e2e_assert_templates
+
+  BUILD_EXT_DIR="$BUILD_DIR/app"
+  echo "Building End-To-End app to $BUILD_EXT_DIR"
+  rm -rf "$BUILD_EXT_DIR"
+  mkdir -p "$BUILD_EXT_DIR"
+  SRC_EXT_DIR="src/javascript/crypto/e2e/extension"
+  # compile javascript files
+  if [ "$1" == "debug" ]; then
+    echo "Debug mode enabled"
+  fi
+  echo "Compiling JS files..."
+  e2e_build_closure_lib_ "e2e.ext.bootstrap" "$BUILD_EXT_DIR/launcher_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.helper.bootstrap" "$BUILD_EXT_DIR/helper_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.prompt.bootstrap" "$BUILD_EXT_DIR/prompt_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.settings.bootstrap" "$BUILD_EXT_DIR/settings_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.welcome.bootstrap" "$BUILD_EXT_DIR/welcome_binary.js" "$BUILD_TPL_DIR" "$1"
+  e2e_build_closure_lib_ "e2e.ext.ui.webview.bootstrap" "$BUILD_EXT_DIR/webview_binary.js" "$BUILD_TPL_DIR" "$1"
+  # compile css files
+  csscompile_e2e="java -jar lib/closure-stylesheets/build/closure-stylesheets.jar src/javascript/crypto/e2e/extension/ui/styles/base.css"
+  echo "Compiling CSS files..."
+  $csscompile_e2e "$SRC_EXT_DIR/ui/glass/glass.css" > "$BUILD_EXT_DIR/glass_styles.css"
+  $csscompile_e2e "$SRC_EXT_DIR/ui/prompt/prompt.css" > "$BUILD_EXT_DIR/prompt_styles.css"
+  $csscompile_e2e "$SRC_EXT_DIR/ui/settings/settings.css" > "$BUILD_EXT_DIR/settings_styles.css"
+  $csscompile_e2e "$SRC_EXT_DIR/ui/welcome/welcome.css" > "$BUILD_EXT_DIR/welcome_styles.css"
+  $csscompile_e2e "$SRC_EXT_DIR/ui/webview/webview.css" > "$BUILD_EXT_DIR/webview_styles.css"
+  echo "Copying app files..."
+  # copy extension files
+  cp -fr "$SRC_EXT_DIR/images" "$BUILD_EXT_DIR"
+  cp -fr "$SRC_EXT_DIR/_locales" "$BUILD_EXT_DIR"
+  find "$SRC_EXT_DIR/ui" -regex .*.html -not -regex .*_test.html -exec cp -f "{}" "$BUILD_EXT_DIR" \;
+  cp -f "$SRC_EXT_DIR/helper/gmonkeystub.js" "$BUILD_EXT_DIR"
+  cp -f "$SRC_EXT_DIR/app_manifest.json" "$BUILD_EXT_DIR/manifest.json"
   echo "Done."
 }
 
@@ -171,7 +238,14 @@ e2e_build_clean() {
   echo "Done."
 }
 
+e2e_clean_deps() {
+  echo "Removing all build dependencies. Install them with ./do.sh install_deps."
+  rm -rfv lib
+  echo "Done."
+}
+
 e2e_install_deps() {
+  set -e
   echo "Installing build dependencies..."
   ./download-libs.sh
   echo "Done."
@@ -221,19 +295,24 @@ e2e_lint() {
   fi
 }
 
-e2e_build() {
-  TARGET=$1
-  shift
-  if [ "$TARGET" == "extension" ]; then
-    e2e_build_extension $*;
-  elif [ "$TARGET" == "library" ]; then
-    e2e_build_library $*;
-  elif [ "$TARGET" == "templates" ]; then
-    e2e_build_templates $*;
-  else
-    echo "Invalid build target $TARGET"
-    exit 1
+e2e_build_docs() {
+  rm -rf docs/*
+  if [ ! -f lib/js-dossier/buck-out/gen/src/java/com/github/jsdossier/dossier.jar ]; then
+    if [ -z `which buck` ]; then
+      echo "Facebook Buck is not installed. Buck is needed by js-dossier to build the documentation."
+      echo "Follow instructions at http://buckbuild.com/setup/quick_start.html to install."
+      echo "Make sure 'buck' command line tool is available."
+      RETVAL=1
+      exit
+    else
+      cd lib/js-dossier
+      ./gendossier.sh -r
+      cd ../..
+    fi
   fi
+  e2e_build_templates
+  java -jar lib/js-dossier/buck-out/gen/src/java/com/github/jsdossier/dossier.jar -c lib/docs-build/dossier-config.json
+  RETVAL=$?
 }
 
 RETVAL=0
@@ -248,14 +327,11 @@ case "$CMD" in
   install_deps)
     e2e_install_deps;
     ;;
-  build)
-    e2e_build $*;
-    ;;
   build_extension)
-    e2e_build_extension;
+    e2e_build_extension $1;
     ;;
-  build_extension_debug)
-    e2e_build_extension "debug";
+  build_app)
+    e2e_build_app $1;
     ;;
   build_library)
     e2e_build_library;
@@ -263,8 +339,14 @@ case "$CMD" in
   build_templates)
     e2e_build_templates;
     ;;
+  build_jsmodule)
+    e2e_build_jsmodule $*;
+    ;;
   clean)
     e2e_build_clean;
+    ;;
+  clean_deps)
+    e2e_clean_deps;
     ;;
   testserver)
     e2e_testserver $*;
@@ -272,11 +354,14 @@ case "$CMD" in
   lint)
     e2e_lint $*;
     ;;
+  build_docs)
+    e2e_build_docs;
+    ;;
   deps)
     e2e_generate_deps;
     ;;
   *)
-    echo "Usage: $0 {build_extension|build_extension_debug|build_library|build_templates|clean|check_deps|install_deps|testserver|lint}"
+    echo "Usage: $0 {build_app|build_extension|build_library|build_templates|build_docs|clean|check_deps|clean_deps|install_deps|testserver|lint} [debug]"
     RETVAL=1
 esac
 

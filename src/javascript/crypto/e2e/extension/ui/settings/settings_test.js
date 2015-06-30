@@ -21,15 +21,16 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.ui.SettingsTest');
 
-goog.require('e2e.ext.Launcher');
+goog.require('e2e.async.Result');
+goog.require('e2e.ext.ExtensionLauncher');
 goog.require('e2e.ext.actions.GetKeyDescription');
 goog.require('e2e.ext.constants');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.ext.ui.Settings');
 goog.require('e2e.ext.ui.dialogs.Generic');
 goog.require('e2e.ext.ui.panels.KeyringMgmtFull');
-goog.require('e2e.ext.ui.preferences');
 goog.require('e2e.ext.utils');
+goog.require('e2e.openpgp.ContextImpl');
 goog.require('goog.testing.AsyncTestCase');
 goog.require('goog.testing.MockControl');
 goog.require('goog.testing.PropertyReplacer');
@@ -38,13 +39,13 @@ goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.ArgumentMatcher');
 goog.require('goog.testing.mockmatchers.SaveArgument');
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var constants = e2e.ext.constants;
 var launcher = null;
 var mockControl = null;
 var page = null;
-var preferences = e2e.ext.ui.preferences;
 var stubs = new goog.testing.PropertyReplacer();
 var testCase = goog.testing.AsyncTestCase.createAndInstall();
 
@@ -76,22 +77,22 @@ var PUBLIC_KEY_BINARY =
 function setUp() {
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
+  launcher = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      new goog.testing.storage.FakeMechanism());
+  launcher.start();
 
   stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: launcher});
   });
 
   page = new e2e.ext.ui.Settings();
-  localStorage.clear();
-  launcher = new e2e.ext.Launcher();
-  launcher.start();
 }
 
 
 function tearDown() {
   goog.dispose(page);
   goog.dispose(launcher);
-  launcher.pgpContext_.keyRing_.reset();
 
   stubs.reset();
   mockControl.$tearDown();
@@ -122,9 +123,11 @@ function testGenerateKey() {
 
 
 function testRemoveKey() {
-  stubs.set(launcher.pgpContext_, 'deleteKey',
-      mockControl.createFunctionMock('deleteKey'));
-  launcher.pgpContext_.deleteKey('test@example.com');
+  var called = false;
+  stubs.set(launcher.pgpContext_, 'deleteKey', function() {
+    called = true;
+    return new e2e.async.Result.toResult(undefined);
+  });
 
   stubs.replace(e2e.ext.ui.panels.KeyringMgmtFull.prototype, 'removeKey',
       mockControl.createFunctionMock('removeKey'));
@@ -137,6 +140,7 @@ function testRemoveKey() {
   fakeGenerateKey().addCallback(function() {
     page.removeKey_('test@example.com');
     window.setTimeout(function() {
+      assertTrue(called);
       mockControl.$verifyAll();
       testCase.continueTesting();
     }, 500);
@@ -247,9 +251,9 @@ function testExportKeyring() {
 
 function testUpdateKeyringPassphrase() {
   page.decorate(document.documentElement);
-  stubs.set(launcher.pgpContext_, 'changeKeyRingPassphrase',
-      mockControl.createFunctionMock('changeKeyRingPassphrase'));
-  launcher.pgpContext_.changeKeyRingPassphrase('testPass');
+  stubs.set(launcher.pgpContext_, 'changeKeyRingPassphrase', function() {
+    return e2e.async.Result.toResult(undefined);
+  });
 
   stubs.replace(chrome.notifications, 'create',
       mockControl.createFunctionMock('create'));
@@ -263,7 +267,9 @@ function testUpdateKeyringPassphrase() {
       goog.testing.mockmatchers.ignoreArgument);
 
   stubs.set(
-      launcher.pgpContext_, 'isKeyRingEncrypted', function() {return true;});
+      launcher.pgpContext_, 'isKeyRingEncrypted', function() {
+        return e2e.async.Result.toResult(true);
+      });
   stubs.set(page.keyringMgmtPanel_, 'setKeyringEncrypted',
       mockControl.createFunctionMock('setKeyringEncrypted'));
   page.keyringMgmtPanel_.setKeyringEncrypted(true);

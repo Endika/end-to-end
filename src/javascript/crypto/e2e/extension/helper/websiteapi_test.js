@@ -50,6 +50,7 @@ function setUp() {
       {address: 'fails#e2e.regexp.vali@dation.com'}],
     cc: [{address: 'cc@example.com'}],
     subject: TEST_SUBJECT,
+    wasSent: false,
 
     body: 'some text<br>with new<br>lines',
     getToEmails: function() { return this.to; },
@@ -59,7 +60,8 @@ function setUp() {
     getPlainTextBody: function() { return this.body.replace(/\<br\>/g, '\n'); },
     setBody: function(value) { this.body = value; },
     getSubject: function() { return this.subject; },
-    setSubject: function(value) { this.subject = value; }
+    setSubject: function(value) { this.subject = value; },
+    send: function() { this.wasSent = true; }
   };
   api = {
     getContentElement: function() { return document.documentElement; },
@@ -123,7 +125,6 @@ function testBootstrap() {
   e2eapi.bootstrapChannel_(function(available) {
     assertEquals(true, available);
     asyncTestCase.continueTesting();
-    stubs.reset();
   });
 }
 
@@ -184,7 +185,7 @@ function testRequestResponseFlow() {
   var requestId;
   var handleResponseFunction = function(response) {
     assertEquals('booboo', response);
-    assertUndefined(e2eapi.pendingCallbacks_[requestId]);
+    assertFalse(e2eapi.pendingCallbacks_.containsKey(requestId));
     asyncTestCase.continueTesting();
   };
 
@@ -194,8 +195,8 @@ function testRequestResponseFlow() {
       assertEquals('bar', request.args);
       requestId = request.id;
       assertEquals(handleResponseFunction,
-          e2eapi.pendingCallbacks_[requestId].callback);
-      assertEquals(fail, e2eapi.pendingCallbacks_[requestId].errback);
+          e2eapi.pendingCallbacks_.get(requestId).callback);
+      assertEquals(fail, e2eapi.pendingCallbacks_.get(requestId).errback);
       // Simulate response
       assertTrue(e2eapi.processWebsiteMessage_({
         data: {
@@ -206,7 +207,7 @@ function testRequestResponseFlow() {
     }
   };
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
-  e2eapi.sendWebsiteRequest_('foo', handleResponseFunction, fail, 'bar');
+  e2eapi.sendEndToEndRequest_('foo', handleResponseFunction, fail, 'bar');
 }
 
 function testRequestResponseError() {
@@ -214,7 +215,7 @@ function testRequestResponseError() {
   var handleErrorFunction = function(error) {
     assertTrue(error instanceof Error);
     assertEquals('booboo', error.message);
-    assertUndefined(e2eapi.pendingCallbacks_[requestId]);
+    assertFalse(e2eapi.pendingCallbacks_.containsKey(requestId));
     asyncTestCase.continueTesting();
   };
 
@@ -223,9 +224,9 @@ function testRequestResponseError() {
       assertEquals('foo', request.call);
       assertEquals('bar', request.args);
       requestId = request.id;
-      assertEquals(fail, e2eapi.pendingCallbacks_[requestId].callback);
+      assertEquals(fail, e2eapi.pendingCallbacks_.get(requestId).callback);
       assertEquals(handleErrorFunction,
-          e2eapi.pendingCallbacks_[requestId].errback);
+          e2eapi.pendingCallbacks_.get(requestId).errback);
       // Simulate response
       assertTrue(e2eapi.processWebsiteMessage_({
         data: {
@@ -236,7 +237,7 @@ function testRequestResponseError() {
     }
   };
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
-  e2eapi.sendWebsiteRequest_('foo', fail, handleErrorFunction, 'bar');
+  e2eapi.sendEndToEndRequest_('foo', fail, handleErrorFunction, 'bar');
 }
 
 function testRequestResponseTimeout() {
@@ -245,7 +246,7 @@ function testRequestResponseTimeout() {
     assertTrue(error instanceof Error);
     assertEquals('Timeout occurred while processing the request.',
         error.message);
-    assertUndefined(e2eapi.pendingCallbacks_[requestId]);
+    assertFalse(e2eapi.pendingCallbacks_.containsKey(requestId));
     asyncTestCase.continueTesting();
   };
 
@@ -255,14 +256,14 @@ function testRequestResponseTimeout() {
       assertEquals('timeouting', request.call);
       assertEquals('bar', request.args);
       requestId = request.id;
-      assertEquals(fail, e2eapi.pendingCallbacks_[requestId].callback);
+      assertEquals(fail, e2eapi.pendingCallbacks_.get(requestId).callback);
       assertEquals(handleErrorFunction,
-          e2eapi.pendingCallbacks_[requestId].errback);
+          e2eapi.pendingCallbacks_.get(requestId).errback);
     }
   };
   asyncTestCase.stepTimeout = e2e.ext.WebsiteApi.REQUEST_TIMEOUT + 10;
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
-  e2eapi.sendWebsiteRequest_('timeouting', fail, handleErrorFunction, 'bar');
+  e2eapi.sendEndToEndRequest_('timeouting', fail, handleErrorFunction, 'bar');
 }
 
 function testIgnoreUnrelatedResponses() {
@@ -318,7 +319,7 @@ function testGetCurrentMessageDom() {
 
 function testNoPortTriggersErrback() {
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
-  e2eapi.sendWebsiteRequest_('irrelevant', function() {
+  e2eapi.sendEndToEndRequest_('irrelevant', function() {
     fail('Should not call this function.');
   }, function(msg) {
     asyncTestCase.continueTesting();
@@ -330,7 +331,7 @@ function testUnknownWebsiteApiCall() {
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
   e2eapi.isApiAvailable_(function(available) {
     assertTrue(available);
-    e2eapi.sendWebsiteRequest_('nonexistent', fail, function(e) {
+    e2eapi.sendEndToEndRequest_('nonexistent', fail, function(e) {
       assertTrue(e instanceof Error);
       assertEquals('Unsupported API call.', e.message);
       asyncTestCase.continueTesting();
@@ -375,12 +376,14 @@ function testSetActiveDraft() {
   e2eapi.isApiAvailable_(function(available) {
     assertTrue(available);
     e2eapi.setActiveDraft_(['foo@example.com', 'noemail', '<a@>',
-      'first,"""last <bar@example.com>'], 'secret message', function(success) {
+      'first,"""last <bar@example.com>'], 'secret message', true,
+    function(success) {
       assertArrayEquals([
         {address: 'foo@example.com', name: undefined},
         {address: 'bar@example.com', name: undefined}
       ], draft.to);
       assertEquals('secret message', draft.body);
+      assertTrue(draft.wasSent);
       assertTrue(success);
       asyncTestCase.continueTesting();
     }, fail);
@@ -432,17 +435,18 @@ function testGetSelectedContentPriority() {
 function testUpdateSelectedContentPriority() {
   stubs.setPath('e2e.ext.utils.text.isGmailOrigin', function() {return true;});
   stubs.replace(e2eapi, 'setActiveDraft_', function(recipients, value,
-      callback, errback, subject) {
+      shouldSend, callback, errback, subject) {
         assertArrayEquals(RECIPIENTS, recipients);
         assertEquals('foo', value);
         assertEquals('bar', subject);
+        assertEquals(true, shouldSend);
         asyncTestCase.continueTesting();
       });
   stubs.replace(e2eapi, 'updateSelectedContentDom_', fail);
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
   e2eapi.isApiAvailable_(function(available) {
     assertTrue(available);
-    e2eapi.updateSelectedContent(RECIPIENTS, 'foo', goog.nullFunction,
+    e2eapi.updateSelectedContent(RECIPIENTS, 'foo', true, goog.nullFunction,
         goog.nullFunction, 'bar');
   });
 }
@@ -453,7 +457,7 @@ function testUpdateSelectedContentWebsite() {
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
   e2eapi.isApiAvailable_(function(available) {
     assertTrue(available);
-    e2eapi.updateSelectedContent(RECIPIENTS, 'foo', function(success) {
+    e2eapi.updateSelectedContent(RECIPIENTS, 'foo', true, function(success) {
       assertTrue(success);
       assertEquals('foo', draft.body);
       assertEquals('subject bar', draft.subject);
@@ -585,21 +589,73 @@ function testUpdateSelectedContentDomTextarea() {
   });
 }
 
-function testWebsiteInitiatedRequest() {
+function testDisabledWebsiteInitiatedRequest() {
   var port_ = {
     postMessage: function(response) {
       assertEquals(null, response.result);
       assertEquals('foo', response.requestId);
-      assertEquals('Not supported.', response.error);
+      assertEquals('Web application originating requests are not supported.',
+          response.error);
       asyncTestCase.continueTesting();
     }
   };
+  e2eapi.port_ = port_;
   asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
   e2eapi.processWebsiteMessage_({
     target: port_,
     data: {
       id: 'foo',
       call: 'unsupported'
+    }
+  });
+}
+
+function testInvalidWebsiteInitiatedRequest() {
+  var port_ = {
+    postMessage: function(response) {
+      assertEquals(null, response.result);
+      assertEquals('foo', response.requestId);
+      assertEquals('Invalid request.',
+          response.error);
+      asyncTestCase.continueTesting();
+    }
+  };
+  e2eapi.setWebsiteRequestForwarder(fail);
+  e2eapi.port_ = port_;
+  asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
+  e2eapi.processWebsiteMessage_({
+    target: port_,
+    data: {
+      id: 'foo',
+      call: 'unsupported'
+    }
+  });
+}
+
+
+function testOpenComposeWebsiteRequest() {
+  var requestId = 'foo';
+  var body = 'test body';
+  var email = 'example@example.com';
+  e2eapi.setWebsiteRequestForwarder(function(request) {
+    assertEquals(requestId, request.id);
+    assertEquals(body, request.args.body);
+    assertEquals(1, request.args.recipients.length);
+    assertEquals(email, request.args.recipients[0]);
+    assertEquals(undefined, request.args.subject);
+    assertEquals('openCompose', request.call);
+    asyncTestCase.continueTesting();
+  });
+  asyncTestCase.waitForAsync('Waiting for the call to api to complete.');
+  e2eapi.processWebsiteMessage_({
+    target: {},
+    data: {
+      id: requestId,
+      call: 'openCompose',
+      args: {
+        to: [{address: email}, {address: 'invalid'}],
+        body: body,
+      }
     }
   });
 }

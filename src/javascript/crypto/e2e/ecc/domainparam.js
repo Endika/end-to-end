@@ -31,6 +31,7 @@ goog.require('e2e.ecc.constant');
 goog.require('e2e.ecc.constant.ed_25519.G_FAST_MULTIPLY_TABLE');
 goog.require('e2e.ecc.constant.p_256.G_FAST_MULTIPLY_TABLE');
 goog.require('e2e.ecc.constant.p_384.G_FAST_MULTIPLY_TABLE');
+goog.require('e2e.ecc.constant.p_521.G_FAST_MULTIPLY_TABLE');
 goog.require('e2e.ecc.curve.Curve25519');
 goog.require('e2e.ecc.curve.Ed25519');
 goog.require('e2e.ecc.curve.Nist');
@@ -248,18 +249,27 @@ e2e.ecc.DomainParam.NIST.fromCurve = function(curveName) {
     constants = e2e.ecc.constant.P_256;
     fastModulus = e2e.ecc.fastModulus.Nist.P_256;
     fastMultiplyTable = e2e.ecc.constant.p_256.G_FAST_MULTIPLY_TABLE;
-  } else {
+  } else if (curveName == e2e.ecc.PrimeCurve.P_384) {
     constants = e2e.ecc.constant.P_384;
     fastModulus = e2e.ecc.fastModulus.Nist.P_384;
     fastMultiplyTable = e2e.ecc.constant.p_384.G_FAST_MULTIPLY_TABLE;
+  } else if (curveName == e2e.ecc.PrimeCurve.P_521) {
+    constants = e2e.ecc.constant.P_521;
+    fastMultiplyTable = e2e.ecc.constant.p_521.G_FAST_MULTIPLY_TABLE;
+  } else {
+    throw new e2e.error.InvalidArgumentsError('Unknown curve.');
   }
   var q = new e2e.BigPrimeNum(constants.Q);  // prime field
   var b = new e2e.BigPrimeNum(constants.B);  // parameter of curve
-  q.setFastModulusType(fastModulus);
+  if (fastModulus) {
+    q.setFastModulusType(fastModulus);
+  }
   var curve = new e2e.ecc.curve.Nist(q, b);
 
   var g = curve.pointFromByteArray(constants.G);
-  g.setFastMultiplyTable(fastMultiplyTable);
+  if (fastMultiplyTable) {
+    g.setFastMultiplyTable(fastMultiplyTable);
+  }
   var n = new e2e.BigPrimeNum(constants.N);  // order of group
   n.setFastModulusType(e2e.FastModulus.FFFFFF);
   return new e2e.ecc.DomainParam.NIST(curve, g, n);
@@ -482,11 +492,18 @@ e2e.ecc.DomainParam.Ed25519.prototype.bigNumFromPrivateKey =
 
 
 /**
- * Expands a 32-byte private key into 64 bytes.  The low 32bytes are converted
- * to a multiplier to be used to calculate the public key.  The high 32 bytes
- * are returned as extra bytes
- * @param {!e2e.hash.Hash} hash The hasher
- * @param {!e2e.ByteArray} privateKey  The private key.
+ * Expands a 32-byte protokey into a 64 byte EdDSA private key.
+ *
+ * p = bytes[0:32] are used as a private scalar; p*B = the public key
+ *
+ * Several bits are clamped to zero or one in order to clear the cofactor
+ * of 8 (equivalently, clear the torsion), and to make it more difficult
+ * to implement scalar multiplication incorrectly.
+ *
+ * k = bytes[32:64] is used as the key input to the nonce-derivation PRF.
+ *
+ * @param {!e2e.hash.Hash} hash The hash function.
+ * @param {!e2e.ByteArray} privateKey  The private (proto-)key.
  * @return {{multiplier: !e2e.BigNum, extra: !e2e.ByteArray}}
  */
 e2e.ecc.DomainParam.Ed25519.prototype.expandPrivateKey = function(hash,

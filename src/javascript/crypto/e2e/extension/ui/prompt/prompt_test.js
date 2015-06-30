@@ -21,6 +21,8 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.ui.PromptTest');
 
+goog.require('e2e.async.Result');
+goog.require('e2e.ext.ExtensionLauncher');
 goog.require('e2e.ext.Launcher');
 goog.require('e2e.ext.actions.DecryptVerify');
 goog.require('e2e.ext.actions.EncryptSign');
@@ -31,10 +33,10 @@ goog.require('e2e.ext.constants.CssClass');
 goog.require('e2e.ext.constants.ElementId');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.ext.ui.Prompt');
-goog.require('e2e.ext.ui.draftmanager');
-goog.require('e2e.ext.ui.preferences');
 goog.require('e2e.ext.utils');
+goog.require('e2e.ext.utils.TabsHelperProxy');
 goog.require('e2e.ext.utils.text');
+goog.require('e2e.openpgp.ContextImpl');
 /** @suppress {extraRequire} intentionally importing all signer functions */
 goog.require('e2e.signer.all');
 goog.require('goog.Timer');
@@ -49,32 +51,37 @@ goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.ArgumentMatcher');
 goog.require('goog.testing.mockmatchers.SaveArgument');
-
+goog.require('goog.testing.storage.FakeMechanism');
+goog.require('goog.ui.PopupMenu');
 goog.setTestOnly();
 
 var asyncTestCase = goog.testing.AsyncTestCase.createAndInstall(document.title);
 
 var constants = e2e.ext.constants;
-var drafts = e2e.ext.ui.draftmanager;
 var mockControl = null;
-var preferences = e2e.ext.ui.preferences;
+var fakeStorage = null;
 var prompt = null;
 var stubs = new goog.testing.PropertyReplacer();
+var helperProxy;
 var utils = e2e.ext.utils;
 
 
 function setUp() {
   asyncTestCase.stepTimeout = 2000;
-  window.localStorage.clear();
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
 
   stubs.replace(goog.Timer.prototype, 'start', goog.nullFunction);
 
-  prompt = new e2e.ext.ui.Prompt();
-  prompt.pgpLauncher_ = new e2e.ext.Launcher();
+  fakeStorage = new goog.testing.storage.FakeMechanism();
+  helperProxy = new e2e.ext.utils.TabsHelperProxy(false);
+
+  prompt = new e2e.ext.ui.Prompt(helperProxy);
+  prompt.pgpLauncher_ = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      fakeStorage);
   prompt.pgpLauncher_.start();
-  stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
+  stubs.setPath('window.chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: prompt.pgpLauncher_});
   });
 
@@ -100,16 +107,48 @@ function testGetSelectedContent() {
 
   var queriedForSelectedContent = false;
   stubs.replace(
-      e2e.ext.Launcher.prototype, 'getSelectedContent', function() {
+      prompt.getHelperProxy(), 'getSelectedContent', function() {
         queriedForSelectedContent = true;
       });
 
   stubs.replace(chrome.runtime, 'getBackgroundPage', function(callback) {
-    callback({launcher: new e2e.ext.Launcher()});
+    callback({launcher: new e2e.ext.ExtensionLauncher(
+        new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+        new goog.testing.storage.FakeMechanism()
+      )});
   });
 
   prompt.decorate(document.documentElement);
   assertTrue('Failed to query for selected content', queriedForSelectedContent);
+}
+
+
+function testGetSelectedContentWithError() {
+  stubs.replace(e2e.ext.Launcher.prototype, 'hasPassphrase', function() {
+    return true;
+  });
+
+  stubs.replace(
+      prompt.getHelperProxy(), 'getSelectedContent', function(cb, errorCb) {
+        // Simulate an error.
+        errorCb();
+      });
+
+  stubs.replace(chrome.runtime, 'getBackgroundPage', function(callback) {
+    callback({launcher: new e2e.ext.ExtensionLauncher(
+        new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+        new goog.testing.storage.FakeMechanism()
+      )});
+  });
+
+  stubs.replace(
+      prompt, 'processSelectedContent_', function(content) {
+        assertNull(content);
+        asyncTestCase.continueTesting();
+      });
+
+  asyncTestCase.waitForAsync('Decorating prompt');
+  prompt.decorate(document.documentElement);
 }
 
 
@@ -135,6 +174,35 @@ function testMenuRendering() {
   var elem = document.body;
 
   assertContains('actionUserSpecified', elem.textContent);
+}
+
+
+function testLoadingState() {
+  stubs.replace(chrome.i18n, 'getMessage', function(msgId) {
+    return msgId;
+  });
+
+  prompt.decorate(document.documentElement);
+  var elem = document.body;
+
+  assertContains('actionLoading', elem.textContent);
+  assertTrue(goog.dom.classlist.contains(
+      prompt.getElementByClass(e2e.ext.constants.CssClass.BUTTONS_CONTAINER),
+      e2e.ext.constants.CssClass.HIDDEN));
+
+}
+
+
+function testDisabledMenuItems() {
+  prompt.decorate(document.documentElement);
+  prompt.processSelectedContent_({
+    action: e2e.ext.constants.Actions.ENCRYPT_SIGN
+  });
+  assertTrue(prompt.getChildAt(1) instanceof goog.ui.PopupMenu);
+  assertEquals(e2e.ext.constants.Actions.ENCRYPT_SIGN,
+      prompt.getChildAt(1).getItemAt(0).getValue());
+  assertFalse('Menu item should be disabled',
+      prompt.getChildAt(1).getItemAt(0).isEnabled());
 }
 
 
@@ -369,6 +437,86 @@ function testDecrypt() {
 }
 
 
+function testOpenPopout() {
+  var selection = 'selected content';
+  var stubWindow = {
+    id: 5
+  };
+  var timesCalled = 0;
+
+  stubs.setPath('e2e.ext.utils.isChromeExtensionWindow', function() {
+    return true;
+  });
+
+  stubs.setPath('chrome.windows.create', function(windowOptions, callback) {
+    assertEquals('prompt.html?popout#' + e2e.ext.testingstubs.TAB_ID,
+        windowOptions.url);
+    assertEquals('popup', windowOptions.type);
+    callback(stubWindow);
+  });
+
+  stubs.setPath('chrome.windows.update', function(windowId, update) {
+    assertEquals(5, windowId);
+    timesCalled++;
+    assertTrue(update.focused);
+  });
+
+  stubs.set(prompt, 'close', function() {
+    assertEquals(2, timesCalled);
+    asyncTestCase.continueTesting();
+  });
+
+  stubs.setPath('chrome.extension.getViews', function() {
+    return [{location: {search: '?popout'}, postMessage: function(msg,
+            senderOrigin) {
+          assertEquals(selection, msg.selection);
+          assertEquals(constants.Actions.ENCRYPT_SIGN, msg.action);
+          assertEquals(location.origin, senderOrigin);
+          timesCalled++;
+        }}];
+  });
+
+  prompt.decorate(document.documentElement);
+  prompt.processSelectedContent_({
+    request: true,
+    selection: selection,
+    action: constants.Actions.ENCRYPT_SIGN
+  });
+  asyncTestCase.waitForAsync('Waiting for popout window to open.');
+  var popoutButton = document.querySelector('.popout-button');
+  popoutButton.click();
+}
+
+function testInitializePopout() {
+  var selection = 'aaa';
+  var removedListener = false;
+  var request = {
+    request: true,
+    selection: selection,
+    action: constants.Actions.DECRYPT_VERIFY
+  };
+  stubs.set(prompt, 'isPopout', true);
+  stubs.set(window, 'removeEventListener', function(eventType) {
+    assertEquals('message', eventType);
+    removedListener = true;
+  });
+  stubs.set(window, 'addEventListener', function(eventType, handler) {
+    assertEquals('message', eventType);
+    handler({data: request, origin: 'http://invalid-origin.com'});
+    assertFalse(prompt.wasDecorated());
+    assertFalse(removedListener);
+    handler({data: request, origin: location.origin});
+    assertTrue(prompt.wasDecorated());
+    assertEquals(constants.Actions.DECRYPT_VERIFY,
+        prompt.panel_.getContent().action);
+    assertEquals(selection, prompt.panel_.getContent().selection);
+    assertTrue(removedListener);
+  });
+  prompt.startMessageListener();
+  assertTrue(removedListener);
+}
+
+
 function testContentInsertedOnEncrypt() {
   var plaintext = 'irrelevant';
   var origin = 'http://www.example.com';
@@ -381,13 +529,13 @@ function testContentInsertedOnEncrypt() {
         }
         return null;
       });
-  stubs.set(prompt.pgpLauncher_, 'updateSelectedContent',
+  stubs.set(prompt.getHelperProxy(), 'updateSelectedContent',
       mockControl.createFunctionMock('updateSelectedContent'));
   var encryptedMsg = new goog.testing.mockmatchers.SaveArgument(goog.isString);
   var subjectMsg = new goog.testing.mockmatchers.SaveArgument(function(a) {
     return (!goog.isDef(a) || goog.isString(a));
   });
-  prompt.pgpLauncher_.updateSelectedContent(encryptedMsg, [USER_ID], origin,
+  prompt.getHelperProxy().updateSelectedContent(encryptedMsg, [USER_ID], origin,
       false, goog.testing.mockmatchers.ignoreArgument,
       goog.testing.mockmatchers.ignoreArgument, subjectMsg);
 
@@ -484,8 +632,8 @@ function testSelectAction() {
   stubs.replace(
       e2e.ext.ui.Prompt.prototype,
       'processSelectedContent_',
-      function(blob, action) {
-        assertEquals('Failed to select action', 'test_action', action);
+      function(blob) {
+        assertEquals('Failed to select action', 'test_action', blob.action);
         processedContent = true;
       });
 
@@ -500,7 +648,10 @@ function testSelectAction() {
 
 
 function testIfNoPassphrase() {
-  prompt.pgpLauncher_ = new e2e.ext.Launcher();
+  prompt.pgpLauncher_ = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      new goog.testing.storage.FakeMechanism()
+      );
   stubs.replace(e2e.ext.Launcher.prototype, 'hasPassphrase', function() {
     return false;
   });
@@ -592,7 +743,7 @@ function testSetKeyringPassphraseError() {
   var passphrase = 'test';
   stubs.set(prompt.pgpLauncher_, 'start',
       mockControl.createFunctionMock('start'));
-  prompt.pgpLauncher_.start(passphrase).$throws(new Error('irrlevant'));
+  prompt.pgpLauncher_.start(passphrase).$throws(new Error('irrelevant'));
 
   stubs.set(prompt, 'close', mockControl.createFunctionMock('close'));
 
@@ -605,7 +756,6 @@ function testSetKeyringPassphraseError() {
 
   var dialog = prompt.getChildAt(0);
   dialog.dialogCallback_(passphrase);
-
   assertEquals(2, prompt.getChildCount());
 
   mockControl.$verifyAll();
@@ -614,7 +764,7 @@ function testSetKeyringPassphraseError() {
 
 function testClose() {
   var closedWindow = false;
-  stubs.replace(window, 'close', function() {
+  prompt.addOnDisposeCallback(function() {
     closedWindow = true;
   });
 
@@ -622,7 +772,6 @@ function testClose() {
   prompt.close();
 
   assertTrue(prompt.isDisposed());
-  assertTrue(closedWindow);
 
   goog.array.forEach(
       document.querySelectorAll('textarea,input'), function(elem) {
@@ -664,8 +813,8 @@ function testNoOp() {
 
 function populatePgpKeys() {
   var ctx = prompt.pgpLauncher_.getContext();
-  ctx.importKey(function(uid, callback) {
-    callback('test');
+  ctx.importKey(function(uid) {
+    return e2e.async.Result.toResult('test');
   }, PRIVATE_KEY_ASCII);
 
   ctx.importKey(function() {}, PUBLIC_KEY_ASCII);

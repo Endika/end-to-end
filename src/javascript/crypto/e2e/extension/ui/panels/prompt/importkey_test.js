@@ -21,12 +21,13 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.ui.panels.prompt.ImportKeyTest');
 
-goog.require('e2e.ext.Launcher');
+goog.require('e2e.ext.ExtensionLauncher');
 goog.require('e2e.ext.actions.Executor');
 goog.require('e2e.ext.actions.GetKeyDescription');
 goog.require('e2e.ext.constants');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.ext.ui.panels.prompt.ImportKey');
+goog.require('e2e.openpgp.ContextImpl');
 goog.require('goog.dom');
 goog.require('goog.testing.AsyncTestCase');
 goog.require('goog.testing.MockControl');
@@ -35,7 +36,7 @@ goog.require('goog.testing.asserts');
 goog.require('goog.testing.jsunit');
 goog.require('goog.testing.mockmatchers');
 goog.require('goog.testing.mockmatchers.SaveArgument');
-
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var asyncTestCase = goog.testing.AsyncTestCase.createAndInstall(document.title);
@@ -70,11 +71,12 @@ var PUBLIC_KEY_ASCII =
 
 
 function setUp() {
-  window.localStorage.clear();
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
 
-  launcher = new e2e.ext.Launcher();
+  launcher = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      new goog.testing.storage.FakeMechanism());
   launcher.start();
   stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: launcher});

@@ -39,7 +39,8 @@ var messages = e2e.ext.messages;
  *   request: boolean,
  *   origin: string,
  *   subject: (string|undefined),
- *   canInject: boolean
+ *   canInject: boolean,
+ *   canSaveDraft: boolean
  * }}
  */
 messages.BridgeMessageRequest;
@@ -51,9 +52,9 @@ messages.BridgeMessageRequest;
  * @typedef {{
  *   value: string,
  *   response: boolean,
- *   detach: boolean,
  *   origin: string,
  *   subject: (string|undefined),
+ *   send: boolean,
  *   recipients: !Array.<string>
  * }}
  */
@@ -95,7 +96,7 @@ messages.ApiRequest.prototype.encryptPassphrases;
 messages.ApiRequest.prototype.decryptPassphrase;
 
 
-/** @type {!function(string, function(string))|undefined} */
+/** @type {!function(string): !e2e.async.Result<string>|undefined} */
 messages.ApiRequest.prototype.passphraseCallback;
 
 
@@ -116,9 +117,7 @@ messages.ApiRequest.prototype.action;
  * @typedef {{
  *   content: (string|undefined),
  *   completedAction: e2e.ext.constants.Actions,
- *   selectedUid: (string|undefined),
- *   error: (string | undefined),
- *   retry: boolean
+ *   error: (string | undefined)
  * }}
  */
 messages.ApiResponse;

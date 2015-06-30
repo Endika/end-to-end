@@ -21,17 +21,17 @@
 /** @suppress {extraProvide} */
 goog.provide('e2e.ext.utils.actionTest');
 
-goog.require('e2e.ext.Launcher');
+goog.require('e2e.ext.ExtensionLauncher');
 goog.require('e2e.ext.testingstubs');
 goog.require('e2e.ext.utils.action');
+goog.require('e2e.openpgp.ContextImpl');
 goog.require('e2e.openpgp.asciiArmor');
 goog.require('e2e.openpgp.block.factory');
 goog.require('goog.testing.MockControl');
 goog.require('goog.testing.PropertyReplacer');
 goog.require('goog.testing.asserts');
 goog.require('goog.testing.jsunit');
-goog.require('goog.testing.mockmatchers');
-goog.require('goog.testing.mockmatchers.SaveArgument');
+goog.require('goog.testing.storage.FakeMechanism');
 goog.setTestOnly();
 
 var launcher = null;
@@ -62,11 +62,12 @@ var PUBLIC_KEY_ASCII =
 
 
 function setUp() {
-  window.localStorage.clear();
   mockControl = new goog.testing.MockControl();
   e2e.ext.testingstubs.initStubs(stubs);
 
-  launcher = new e2e.ext.Launcher();
+  launcher = new e2e.ext.ExtensionLauncher(
+      new e2e.openpgp.ContextImpl(new goog.testing.storage.FakeMechanism()),
+      new goog.testing.storage.FakeMechanism());
   launcher.start();
   stubs.setPath('chrome.runtime.getBackgroundPage', function(callback) {
     callback({launcher: launcher});
@@ -101,43 +102,3 @@ function testGetContext() {
   mockControl.$verifyAll();
 }
 
-
-function testGetSelectedContent() {
-  var callback = mockControl.createFunctionMock();
-  callback();
-
-  var callbackArg = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
-  stubs.set(launcher, 'getSelectedContent', mockControl.createFunctionMock());
-  launcher.getSelectedContent(callbackArg,
-      goog.testing.mockmatchers.ignoreArgument);
-
-  mockControl.$replayAll();
-  utils.getSelectedContent(callback, goog.nullFunction);
-  callbackArg.arg();
-  mockControl.$verifyAll();
-}
-
-
-function testUpdateSelectedContent() {
-  var content = 'irrelevant';
-  var recipients = [];
-  var origin = 'irrelevant';
-  var subject = 'irrelevant';
-  var expectMoreUpdates = false;
-  var callback = mockControl.createFunctionMock();
-  callback();
-
-  var callbackArg = new goog.testing.mockmatchers.SaveArgument(goog.isFunction);
-  stubs.set(
-      launcher, 'updateSelectedContent', mockControl.createFunctionMock());
-  launcher.updateSelectedContent(
-      content, recipients, origin, expectMoreUpdates, callbackArg,
-      goog.testing.mockmatchers.ignoreArgument, subject);
-
-  mockControl.$replayAll();
-  utils.updateSelectedContent(
-      content, recipients, origin, expectMoreUpdates, callback,
-      goog.nullFunction, subject);
-  callbackArg.arg();
-  mockControl.$verifyAll();
-}
