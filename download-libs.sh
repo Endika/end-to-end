@@ -37,10 +37,11 @@ fi
 if [ ! -d lib ]; then
   mkdir lib
 fi
-cd lib
 
 git submodule init
 git submodule update
+
+cd lib
 
 # symlink typedarray
 if [ ! -d typedarray ]; then
@@ -64,7 +65,7 @@ if [ ! -d closure-templates-compiler ]; then
 fi
 
 # build css compiler
-if [ ! -f lib/closure-stylesheets/build/closure-stylesheets.jar ]; then
+if [ ! -f closure-stylesheets/build/closure-stylesheets.jar ]; then
   cd closure-stylesheets
   ant
   cd ..

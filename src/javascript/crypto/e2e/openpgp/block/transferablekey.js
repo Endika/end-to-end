@@ -338,10 +338,13 @@ e2e.openpgp.block.TransferableKey.prototype.serialize = function() {
  * Creates a Key object representing the TransferableKey.
  * @param {boolean=} opt_dontSerialize if true, skip key serialization in
  *     results.
+ * @param {!e2e.openpgp.KeyProviderId=} opt_keyProviderId Key provider ID
  * @return {!e2e.openpgp.Key}
  */
 e2e.openpgp.block.TransferableKey.prototype.toKeyObject = function(
-    opt_dontSerialize) {
+    opt_dontSerialize, opt_keyProviderId) {
+  var keyProviderId = /** @type {!e2e.openpgp.KeyProviderId} */ (
+      opt_keyProviderId || 'UnknownProvider');
   return {
     key: this.keyPacket.toKeyPacketInfo(),
     subKeys: goog.array.map(
@@ -351,7 +354,8 @@ e2e.openpgp.block.TransferableKey.prototype.toKeyObject = function(
     uids: this.getUserIds(),
     serialized: /** @type {!e2e.ByteArray} */(
         (opt_dontSerialize || !this.SERIALIZE_IN_KEY_OBJECT) ?
-        [] : this.serialize())
+        [] : this.serialize()),
+    providerId: keyProviderId
   };
 };
 
