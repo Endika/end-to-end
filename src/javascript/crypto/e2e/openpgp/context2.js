@@ -82,7 +82,8 @@ e2e.openpgp.Context2.prototype.getAllKeysByEmail = goog.abstractMethod;
 
 
 /**
- * Returns a single key that has a matching OpenPGP fingerprint.
+ * Returns a single public key that has a matching OpenPGP fingerprint for the
+ * main key packet.
  * @param {!e2e.openpgp.KeyFingerprint} fingerprint The key fingerprint
  * @param {!e2e.openpgp.KeyProviderId=} opt_providerId If passed, only return
  *     the keys from this KeyProvider.
@@ -90,7 +91,7 @@ e2e.openpgp.Context2.prototype.getAllKeysByEmail = goog.abstractMethod;
  *     untrusted.
  * @export
  */
-e2e.openpgp.Context2.prototype.getKeyByFingerprint = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.getPublicKeyByFingerprint = goog.abstractMethod;
 
 
 /**
@@ -127,8 +128,8 @@ e2e.openpgp.Context2.prototype.generateKeyPair = goog.abstractMethod;
 /**
  * Returns the keyring export options.
  * @param {!e2e.openpgp.KeyRingType} keyringType The type of the keyring.
- * @return {!goog.Thenable<e2e.openpgp.KeyringExportOptions>} The available
- *     export options.
+ * @return {!goog.Thenable<!Array<!e2e.openpgp.KeyringExportOptions>>} The
+ *     available export options.
  * @export
  */
 e2e.openpgp.Context2.prototype.getKeyringExportOptions = goog.abstractMethod;
@@ -191,7 +192,7 @@ e2e.openpgp.Context2.prototype.isKeyTrusted = goog.abstractMethod;
  * @return {!e2e.openpgp.KeyPromise} The unlocked Key.
  * @export
  */
-e2e.openpgp.Context2.prototype.unlockKey = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.unlockSecretKey = goog.abstractMethod;
 
 
 /**
@@ -234,8 +235,8 @@ e2e.openpgp.Context2.prototype.getKeysDescription = goog.abstractMethod;
  * @param {!function(string):!goog.Thenable<string>} passphraseCallback This
  *     callback is used for requesting an action-specific passphrase from the
  *     user (if the key material is encrypted to a passprase).
- * @return {!e2e.openpgp.UserIdsPromise} List of user IDs that were
- *     successfully imported.
+ * @return {!e2e.openpgp.KeysPromise} List of keys that were successfully
+ *     imported.
  * @export
  */
 e2e.openpgp.Context2.prototype.importKeys = goog.abstractMethod;
@@ -266,9 +267,9 @@ e2e.openpgp.Context2.prototype.encryptSign = goog.abstractMethod;
  *     callback is used for requesting an passphrase from the
  *     user if the ciphertext is encrypted to a passphrase.
  * @param {!Array.<!e2e.openpgp.Key>=} opt_decryptionKeys If present,
- *     only those keys will be used for decryptiond. Otherwise, Context2 uses
+ *     only those keys will be used for decryption. Otherwise, Context2 uses
  *     Key ID hints in the message to resolve keys on its own.
- * @param {!Array.<!e2e.openpgp.Key>=} opt_allowedKeys If present,
+ * @param {!Array.<!e2e.openpgp.Key>=} opt_verificationKeys If present,
  *     only those keys will be used for signature verification. Otherwise,
  *     Context2 uses Key ID hints in the message to resolve keys on its own.
  * @return {!e2e.openpgp.VerifyDecryptPromise} The result of the
@@ -288,39 +289,47 @@ e2e.openpgp.Context2.prototype.removeKeys = goog.abstractMethod;
 
 
 /**
- * Initialize the key storage.
- * @param {function():goog.Thenable<string>} passphraseCallback Callback
- *     providing the passphrase for decrypting the locally stored KeyRing.
- * @return {!goog.Thenable}
+ * Initializes all the KeyProviders used by the context.
+ * @param {Object<!e2e.openpgp.KeyProviderId,
+ *     e2e.openpgp.KeyProviderConfig>} config Configuration for the key
+ *     providers. Default config will be used, when a KeyProviderId has not been
+ *     specified for a given KeyProvider.
+ * @return {!goog.Thenable<!Object<!e2e.openpgp.KeyProviderId,
+ *     e2e.openpgp.KeyProviderState>>} The state of the key providers, after
+ *     initialization.
  * @export
  */
-e2e.openpgp.Context2.prototype.initializeKeyRing = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.initializeKeyProviders = goog.abstractMethod;
 
 
 /**
- * Changes the passphrase that the storage of the keys is encrypted to.
- * Use an empty string not to use storage encryption.
- * @param {string} passphrase Change the passphrase for encrypting the KeyRing
- *     when stored locally. Use empty string to store the keyring unencrypted.
- * @return {!goog.Thenable}
+ * Returns IDs of all supported KeyProviders.
+ * @return {!goog.Thenable<!Array<!e2e.openpgp.KeyProviderId>>} Supported key
+ *     provider IDs.
  * @export
  */
-e2e.openpgp.Context2.prototype.changeKeyRingPassphrase = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.getKeyProviderIds = goog.abstractMethod;
 
 
 /**
- * Checks if the keys can be accessed without providing a passphrase.
- * @return {!goog.Thenable.<boolean>} True if there is a correct keyring
- *     passphrase set.
+ * Returns the current state of all supported Key Providers.
+ * @return {!goog.Thenable<!Object<!e2e.openpgp.KeyProviderId,
+ *     e2e.openpgp.KeyProviderState>>} The state of all key providers.
  * @export
  */
-e2e.openpgp.Context2.prototype.isKeyRingUnlocked = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.getKeyRingState = goog.abstractMethod;
 
 
 /**
- * Checks if storage of the keys is encrypted.
- * @return {!goog.Thenable.<boolean>} True if the keyring is encrypted
- *     in persistent storage.
+ * Reinitializes the individual key provider with different data.
+ * Use this function when some provider-specific configuration needs to be
+ * changed at runtime (e.g. when the user requests to change the passphrase of
+ * the provider's storage).
+ * @param {!e2e.openpgp.KeyProviderId} providerId Provider to change the state
+ *     of.
+ * @param {!e2e.openpgp.KeyProviderConfig} newConfig The new
+ *     initialization data.
+ * @return {!goog.Thenable<e2e.openpgp.KeyProviderState>}
  * @export
  */
-e2e.openpgp.Context2.prototype.isKeyRingEncrypted = goog.abstractMethod;
+e2e.openpgp.Context2.prototype.reconfigureKeyProvider = goog.abstractMethod;

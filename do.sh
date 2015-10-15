@@ -20,6 +20,7 @@
 PYTHON_CMD="python"
 JSCOMPILE_CMD="java -jar lib/closure-compiler/build/compiler.jar --flagfile=compiler.flags"
 CKSUM_CMD="cksum" # chosen because it's available on most Linux/OS X installations
+NODEJS_CMD="${NODEJS_CMD:-nodejs}"
 BUILD_DIR="build"
 BUILD_TPL_DIR="$BUILD_DIR/templates"
 cd ${0%/*}
@@ -51,6 +52,11 @@ e2e_assert_dependencies() {
     fi
   done
   echo "All dependencies met."
+}
+
+e2e_assert_nodejs() {
+  # Check if nodejs is installed.
+  type "$NODEJS_CMD" >/dev/null 2>&1 || { echo >&2 "Please install nodejs to run the compatibility tests."; exit 1; }
 }
 
 e2e_get_file_cksum() {
@@ -151,6 +157,23 @@ e2e_build_library() {
   e2e_build_closure_lib_ "e2e.openpgp.ContextImpl" "$BUILD_EXT_DIR/end-to-end.compiled.js"
   e2e_build_closure_lib_ "e2e.openpgp.ContextImpl" "$BUILD_EXT_DIR/end-to-end.debug.js" "" "debug"
   echo ""
+  echo "Done."
+}
+
+e2e_test_compat_e2e() {
+  e2e_assert_nodejs
+  e2e_assert_dependencies
+  set -e
+  e2e_assert_jsdeps
+  BUILD_EXT_DIR="$BUILD_DIR/library"
+  rm -rf "$BUILD_EXT_DIR"
+  mkdir -p "$BUILD_EXT_DIR"
+  echo -n "Building End-To-End debug library into $BUILD_DIR/library..."
+  e2e_build_closure_lib_ "e2e.openpgp.ContextImpl" "$BUILD_EXT_DIR/end-to-end.debug.js" "" "debug"
+  echo
+  echo "Running compatibility tests..."
+  TEST_ROOT="src/javascript/crypto/e2e/compatibility_tests"
+  $NODEJS_CMD "$TEST_ROOT/drivers/e2e/run.js" "$BUILD_EXT_DIR/end-to-end.debug.js" "$TEST_ROOT/testcases"
   echo "Done."
 }
 
@@ -296,22 +319,23 @@ e2e_lint() {
 }
 
 e2e_build_docs() {
+  DOSSIER_JAR="lib/js-dossier/bazel-bin/src/java/com/github/jsdossier/dossier_deploy.jar"
   rm -rf docs/*
-  if [ ! -f lib/js-dossier/buck-out/gen/src/java/com/github/jsdossier/dossier.jar ]; then
-    if [ -z `which buck` ]; then
-      echo "Facebook Buck is not installed. Buck is needed by js-dossier to build the documentation."
-      echo "Follow instructions at http://buckbuild.com/setup/quick_start.html to install."
-      echo "Make sure 'buck' command line tool is available."
+  if [ ! -f $DOSSIER_JAR ]; then
+    if [ -z `which bazel` ]; then
+      echo "Bazel is not installed. Bazel is needed by js-dossier to build the documentation."
+      echo "Follow instructions at http://bazel.io/docs/install.html to install."
+      echo "Make sure 'bazel' command line tool is available."
       RETVAL=1
       exit
     else
-      cd lib/js-dossier
+      pushd lib/js-dossier
       ./gendossier.sh -r
-      cd ../..
+      popd
     fi
   fi
   e2e_build_templates
-  java -jar lib/js-dossier/buck-out/gen/src/java/com/github/jsdossier/dossier.jar -c lib/docs-build/dossier-config.json
+  java -jar $DOSSIER_JAR -c lib/docs-build/dossier-config.json
   RETVAL=$?
 }
 
@@ -335,6 +359,9 @@ case "$CMD" in
     ;;
   build_library)
     e2e_build_library;
+    ;;
+  test_compat_e2e)
+    e2e_test_compat_e2e;
     ;;
   build_templates)
     e2e_build_templates;
@@ -361,7 +388,7 @@ case "$CMD" in
     e2e_generate_deps;
     ;;
   *)
-    echo "Usage: $0 {build_app|build_extension|build_library|build_templates|build_docs|clean|check_deps|clean_deps|install_deps|testserver|lint} [debug]"
+    echo "Usage: $0 {build_app|build_extension|build_library|build_templates|build_docs|clean|check_deps|clean_deps|install_deps|testserver|test_compat_e2e|lint} [debug]"
     RETVAL=1
 esac
 

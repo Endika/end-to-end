@@ -258,7 +258,7 @@ e2e.openpgp.ContextImpl.prototype.importKey = function(
  *     opt_result Result from the previous call.
  * @param {string=} opt_passphrase
  * @return {!e2e.async.Result.<e2e.openpgp.block.TransferableKey>}
- *     Result with all imported uids.
+ *     Result with all imported keys.
  * @private
  */
 e2e.openpgp.ContextImpl.prototype.tryToImportKey_ = function(
@@ -270,7 +270,7 @@ e2e.openpgp.ContextImpl.prototype.tryToImportKey_ = function(
       e2e.stringToByteArray(opt_passphrase) : undefined;
   this.keyRing_.importKey(block, passphrase)
       .addCallback(
-      // False as a return value only indicates duplicate keys already exist
+      // Null as a return value only indicates duplicate keys already exist
       // in the keyring. Return original block anyway.
       goog.bind(result.callback, result, block))
       .addErrback(function(error) {
@@ -374,8 +374,22 @@ e2e.openpgp.ContextImpl.prototype.verifyDecryptInternal = function(
     var block = e2e.openpgp.block.factory.parseByteArrayMessage(
         encryptedMessage, opt_charset);
     if (block instanceof e2e.openpgp.block.EncryptedMessage) {
-      var keyCallback = goog.bind(this.keyRing_.getSecretKey, this.keyRing_);
-      return block.decrypt(keyCallback, passphraseCallback).addCallback(
+      var keyCipherCallback = goog.bind(function(keyId, algorithm) {
+        return e2e.async.Result.toResult(null).addCallback(function() {
+          var secretKeyPacket = this.keyRing_.getSecretKey(keyId);
+          if (!secretKeyPacket) {
+            return null;
+          }
+          var cipher = goog.asserts.assertObject(
+              secretKeyPacket.cipher.getWrappedCipher());
+          goog.asserts.assert(algorithm == cipher.algorithm);
+          // Cipher might also be a signer here. Check if cipher can decrypt
+          // (at runtime, as we can't check for e2e.cipher.Cipher implementation
+          // statically).
+          return goog.isFunction(cipher.decrypt) ? cipher : null;
+        }, this);
+      }, this);
+      return block.decrypt(keyCipherCallback, passphraseCallback).addCallback(
           this.processLiteralMessage_, this).addCallback(function(result) {
         result.decrypt.wasEncrypted = true;
         return result;
@@ -499,7 +513,16 @@ e2e.openpgp.ContextImpl.prototype.encryptSign = function(
  */
 e2e.openpgp.ContextImpl.prototype.clearSignInternal = function(
     plaintext, key) {
-  var messageRes = e2e.openpgp.ClearSignMessage.construct(plaintext, key);
+  var keyPacket = null;
+  if (key) {
+    keyPacket = key.getKeyToSign();
+  }
+  if (!keyPacket) {
+    // No provided key can sign.
+    return e2e.async.Result.toError(new e2e.openpgp.error.InvalidArgumentsError(
+        'Provided key does not have a signing capability.'));
+  }
+  var messageRes = e2e.openpgp.ClearSignMessage.construct(plaintext, keyPacket);
   return messageRes.addCallback(function(message) {
     return e2e.openpgp.asciiArmor.encodeClearSign(message, this.armorHeaders_);
   }, this);
@@ -552,11 +575,18 @@ e2e.openpgp.ContextImpl.prototype.encryptSignInternal = function(
     plaintext, options, encryptionKeys, passphrases, opt_signatureKey) {
   try {
     var literal = e2e.openpgp.block.LiteralMessage.construct(plaintext);
+    var sigKeyPacket = opt_signatureKey && opt_signatureKey.getKeyToSign();
+    if (opt_signatureKey && !sigKeyPacket) {
+      // Signature was requested, but no provided key can sign.
+      throw new e2e.openpgp.error.InvalidArgumentsError(
+          'Provided key does not have a signing capability.');
+    }
+
     var blockResult = e2e.openpgp.block.EncryptedMessage.construct(
         literal,
         encryptionKeys,
         passphrases,
-        opt_signatureKey);
+        sigKeyPacket);
     var serializedBlock = blockResult.addCallback(function(block) {
       return block.serialize();
     }, this);

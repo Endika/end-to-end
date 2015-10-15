@@ -34,8 +34,10 @@ goog.provide('e2e.openpgp.KeyId');
 goog.provide('e2e.openpgp.KeyPacketInfo');
 goog.provide('e2e.openpgp.KeyPair');
 goog.provide('e2e.openpgp.KeyPromise');
+goog.provide('e2e.openpgp.KeyProviderConfig');
 goog.provide('e2e.openpgp.KeyProviderCredentials');
 goog.provide('e2e.openpgp.KeyProviderId');
+goog.provide('e2e.openpgp.KeyProviderState');
 goog.provide('e2e.openpgp.KeyPurposeType');
 goog.provide('e2e.openpgp.KeyResult');
 goog.provide('e2e.openpgp.KeyRingMap');
@@ -43,6 +45,7 @@ goog.provide('e2e.openpgp.KeyRingType');
 goog.provide('e2e.openpgp.KeyTrustData');
 goog.provide('e2e.openpgp.KeyUnlockData');
 goog.provide('e2e.openpgp.KeyringBackupInfo');
+goog.provide('e2e.openpgp.KeyringExportFormat');
 goog.provide('e2e.openpgp.KeyringExportOptions');
 goog.provide('e2e.openpgp.Keys');
 goog.provide('e2e.openpgp.KeysPromise');
@@ -80,7 +83,7 @@ e2e.openpgp.EncryptOptions;
 
 /**
  * Result of a decrypt operation.
- * @typedef {?{data: !e2e.ByteArray,
+ * @typedef {?{data: (!e2e.ByteArray|!Uint8Array),
  *     options: !e2e.openpgp.FileOptions, wasEncrypted: boolean}}
  */
 e2e.openpgp.DecryptResult;
@@ -153,7 +156,7 @@ e2e.openpgp.VerifyDecryptPromise;
 
 /**
  * Promise resolved with the result of the encryption and signing operation.
- * @typedef {goog.Thenable.<!e2e.ByteArray>|goog.Thenable.<string>}
+ * @typedef {goog.Thenable.<!e2e.ByteArray|string>}
  */
 e2e.openpgp.EncryptSignPromise;
 
@@ -170,7 +173,13 @@ e2e.openpgp.KeyPacketInfo;
  * Key object.
  * @typedef {?{subKeys: !Array.<!e2e.openpgp.KeyPacketInfo>, uids:
  *     !Array.<string>, key: !e2e.openpgp.KeyPacketInfo, serialized:
- *     !e2e.ByteArray, providerId: !e2e.openpgp.KeyProviderId}}
+ *     !e2e.ByteArray, providerId: !e2e.openpgp.KeyProviderId,
+ *     signingKeyId: ?e2e.openpgp.KeyId,
+ *     signAlgorithm: ?e2e.signer.Algorithm,
+ *     signHashAlgorithm: ?e2e.hash.Algorithm,
+ *     decryptionKeyId: ?e2e.openpgp.KeyId,
+ *     decryptionAlgorithm: ?e2e.cipher.Algorithm
+ *     }}
  */
 e2e.openpgp.Key;
 
@@ -220,7 +229,7 @@ e2e.openpgp.TransferableKeyMap;
 
 /**
  * The key ring map structure as used by the context.
- * @typedef {goog.structs.Map.<string, !Array.<!e2e.openpgp.Key>>}
+ * @typedef {Object.<string, !Array.<!e2e.openpgp.Key>>}
  */
 e2e.openpgp.KeyRingMap;
 
@@ -313,9 +322,25 @@ e2e.openpgp.KeyGenerateOptions;
 
 /**
  * Keyring export options (opaque to the End-To-End library).
- * @typedef {Object}
+ * @typedef {*}
  */
 e2e.openpgp.KeyringExportOptions;
+
+
+/**
+ * Configuration data used to initialize or reconfigure a KeyProvider
+ * (opaque to the End-To-End library).
+ * @typedef {*}
+ */
+e2e.openpgp.KeyProviderConfig;
+
+
+/**
+ * State of the KeyProvider (opaque to the End-To-End library). State can
+ * indicate what options can be used to reconfigure the KeyProvider.
+ * @typedef {*}
+ */
+e2e.openpgp.KeyProviderState;
 
 
 /**
@@ -336,7 +361,6 @@ e2e.openpgp.KeyPair;
 /**
  * Plaintext to be encrypted/signed.
  * @typedef {string|e2e.ByteArray}
- * TODO(koto): Add support for streams (e.g. via Blobs).
  */
 e2e.openpgp.Plaintext;
 
@@ -344,6 +368,15 @@ e2e.openpgp.Plaintext;
 /**
  * Ciphertext to be decrypted/verified.
  * @typedef {string|e2e.ByteArray}
- * TODO(koto): Add support for streams (e.g. via Blobs).
  */
 e2e.openpgp.Ciphertext;
+
+
+/**
+ * Common keyring export formats.
+ * @enum {string}
+ */
+e2e.openpgp.KeyringExportFormat = {
+  'OPENPGP_PACKETS_ASCII': 'OPENPGP_PACKETS_ASCII',
+  'OPENPGP_PACKETS_BINARY': 'OPENPGP_PACKETS_BINARY'
+};
